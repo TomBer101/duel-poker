@@ -1,21 +1,16 @@
-import { defineConfig } from 'vitest/config'
+import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 // https://vite.dev/config/
+// Test config lives in vitest.config.ts (kept separate so Vitest can load a
+// plugin-free config — the Tailwind/React plugins tripped Vitest's config
+// bundler in this environment).
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
       '@': '/src',
     }
-  },
-  test: {
-    // Enables global test API methods like describe, it, expect without manual imports
-    globals: true, 
-    // Emulates a browser environment in Node.js via jsdom
-    environment: 'jsdom',
-    // Specifies the path to your initialization script
-    setupFiles: './src/test/setup.ts', 
   },
 })
