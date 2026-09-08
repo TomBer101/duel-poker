@@ -1,18 +1,27 @@
 import { defineConfig } from "vitest/config";
+import react from "@vitejs/plugin-react";
 
-// Deliberately plugin-free: the Tailwind/React Vite plugins crash Vitest's
-// config bundler in this environment (unsigned native rolldown binary is
-// blocked by Windows Smart App Control, and the wasm fallback mishandles the
-// config entry path). Engine/AI/crypto tests need no plugins. When UI tests
-// arrive, add `@vitejs/plugin-react` here or move to a projects setup.
+// Kept separate from vite.config.ts on purpose. Historically the Tailwind/React
+// Vite plugins crashed Vitest's config bundler in this environment (the unsigned
+// native rolldown binary is blocked by Windows Smart App Control, so Vite 8 /
+// Vitest 4 fall back to the WASM engine). That crash no longer reproduces on the
+// current Vite/Vitest, so `@vitejs/plugin-react` is loaded here for the JSX
+// transform that component tests need. Tailwind is still NOT loaded: tests never
+// assert on generated CSS, and leaving it out keeps the config surface minimal.
+//
+// If plugin loading regresses here again, the fallback is a plugin-free config
+// with `esbuild: { jsx: "automatic", jsxImportSource: "react" }` — that gives the
+// JSX transform without any plugin. Either way, do not move `test:` into
+// vite.config.ts (that pulls the Tailwind plugin back into Vitest's config load).
 export default defineConfig({
+  plugins: [react()],
   resolve: {
     alias: { "@": "/src" },
   },
   test: {
     globals: true,
-    environment: "node",
-    include: ["src/**/*.test.ts"],
-    // setupFiles (jest-dom) will be re-added when UI component tests land.
+    environment: "jsdom",
+    include: ["src/**/*.test.{ts,tsx}"],
+    setupFiles: ["src/test/setup.ts"],
   },
 });
