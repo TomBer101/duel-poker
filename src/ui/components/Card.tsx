@@ -1,7 +1,9 @@
 import { motion, useReducedMotion } from "motion/react";
 import type { CSSProperties } from "react";
 import type { Card as CardT, Suit } from "../../engine/types";
+import { cn } from "../cn";
 import { rankLabel, SUIT_META } from "../format";
+import styles from "./Card.module.css";
 
 export type CardSize = "sm" | "md" | "lg";
 
@@ -17,7 +19,7 @@ export type CardProps = {
   /** This is the viewer's own hidden card — adds a lock badge to the back. */
   mine?: boolean;
   size?: CardSize;
-  /** Grow on hover / focus. Off by default; on for the player's live hands. */
+  /** Grow on hover. Off by default; on for the player's live hands. */
   interactive?: boolean;
   className?: string;
   /** Override the computed accessible label. */
@@ -26,13 +28,12 @@ export type CardProps = {
 
 /**
  * A single playing card. Three visual states:
- * - face-up: `card` given, `faceDown` false — rank + suit in the viewer's
- *   four-colour scheme (♠ ink, ♥ red, ♦ blue, ♣ green).
+ * - face-up: `card` given, `faceDown` false — rank + suit in the deck's colours.
  * - your hidden card: `card` given, `faceDown` + `mine` — back with a lock.
  * - unknown card: no `card` — plain back.
  *
- * Front and back are both mounted on a 3D-flipped container so the reveal
- * sequence can animate `faceDown` false and get a real flip for free.
+ * Front and back are both mounted on a 3D-flipped container, so the reveal
+ * sequence gets a real flip just by animating `faceDown` to false.
  */
 export function Card({
   card,
@@ -60,33 +61,30 @@ export function Card({
 
   return (
     <div
-      className={[
-        "card",
-        `card--${size}`,
-        interactive && "card--interactive",
+      className={cn(
+        styles.card,
+        size === "sm" && styles.sm,
+        size === "lg" && styles.lg,
+        interactive && styles.interactive,
         className,
-      ]
-        .filter(Boolean)
-        .join(" ")}
+      )}
       role="img"
       aria-label={label}
     >
       <motion.div
-        className="card__flip"
+        className={styles.flip}
         initial={false}
         animate={{ rotateY: showBack ? 180 : 0 }}
         transition={
-          reduceMotion
-            ? { duration: 0 }
-            : { duration: 0.45, ease: [0.4, 0, 0.2, 1] }
+          reduceMotion ? { duration: 0 } : { duration: 0.45, ease: [0.4, 0, 0.2, 1] }
         }
       >
-        <div className="card__face card__face--front" style={frontStyle}>
+        <div className={cn(styles.face, styles.faceFront)} style={frontStyle}>
           {card && <Face rank={card.rank} suit={card.suit} />}
         </div>
-        <div className="card__face card__face--back">
+        <div className={cn(styles.face, styles.faceBack)}>
           {mine && (
-            <span className="card__badge" aria-hidden="true">
+            <span className={styles.badge} aria-hidden="true">
               🔒
             </span>
           )}
@@ -105,18 +103,18 @@ function Face({ rank, suit }: { rank: number; suit: Suit }) {
   const s = SUIT_META[suit].glyph;
   return (
     <>
-      <span className="card__corner card__corner--tl">
-        <span className="card__rank">{r}</span>
-        <span className="card__suit" aria-hidden="true">
+      <span className={cn(styles.corner, styles.cornerTl)}>
+        <span className={styles.rank}>{r}</span>
+        <span className={styles.suit} aria-hidden="true">
           {s}
         </span>
       </span>
-      <span className="card__pip" aria-hidden="true">
+      <span className={styles.pip} aria-hidden="true">
         {s}
       </span>
-      <span className="card__corner card__corner--br" aria-hidden="true">
-        <span className="card__rank">{r}</span>
-        <span className="card__suit">{s}</span>
+      <span className={cn(styles.corner, styles.cornerBr)} aria-hidden="true">
+        <span className={styles.rank}>{r}</span>
+        <span className={styles.suit}>{s}</span>
       </span>
     </>
   );

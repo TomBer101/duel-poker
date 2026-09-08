@@ -40,11 +40,11 @@ describe("Card", () => {
 
   it("maps each suit to its own colour variable", () => {
     const { rerender } = render(<Card card={{ suit: "Diamonds", rank: 5 }} />);
-    let front = document.querySelector(".card__face--front") as HTMLElement;
+    let front = document.querySelector("[style*='--suit']") as HTMLElement;
     expect(front.style.getPropertyValue("--suit")).toBe("var(--suit-diamond)");
 
     rerender(<Card card={{ suit: "Clubs", rank: 5 }} />);
-    front = document.querySelector(".card__face--front") as HTMLElement;
+    front = document.querySelector("[style*='--suit']") as HTMLElement;
     expect(front.style.getPropertyValue("--suit")).toBe("var(--suit-club)");
   });
 });

@@ -1,0 +1,99 @@
+.card {
+  --cw: clamp(2.75rem, 8.5vw, 4.25rem);
+  position: relative;
+  width: var(--cw);
+  aspect-ratio: 5 / 7;
+  flex: none;
+}
+.sm {
+  --cw: clamp(2rem, 6vw, 2.6rem);
+}
+.lg {
+  --cw: 6rem;
+}
+
+.flip {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+}
+
+.face {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+  border-radius: var(--card-radius);
+  overflow: hidden;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.45),
+    0 4px 10px rgba(0, 0, 0, 0.25);
+}
+.faceFront {
+  background: var(--card-face);
+  color: var(--suit, var(--card-face-ink));
+}
+.faceBack {
+  transform: rotateY(180deg);
+  background:
+    repeating-linear-gradient(
+      45deg,
+      transparent 0 6px,
+      rgba(47, 92, 143, 0.28) 6px 12px
+    ),
+    linear-gradient(160deg, var(--card-back), #0c1626);
+  border: 1px solid var(--card-back-line);
+}
+
+.corner {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 0.92;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.cornerTl {
+  top: 6%;
+  left: 8%;
+}
+.cornerBr {
+  right: 8%;
+  bottom: 6%;
+  transform: rotate(180deg);
+}
+.rank {
+  font-size: calc(var(--cw) * 0.34);
+}
+.suit {
+  font-size: calc(var(--cw) * 0.24);
+}
+.pip {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: calc(var(--cw) * 0.62);
+  opacity: 0.15;
+}
+.badge {
+  position: absolute;
+  top: 6%;
+  right: 8%;
+  font-size: calc(var(--cw) * 0.28);
+  opacity: 0.85;
+}
+
+.interactive {
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+.interactive:hover {
+  transform: translateY(-6%) scale(1.06);
+  z-index: 5;
+}
+@media (prefers-reduced-motion: reduce) {
+  .interactive:hover {
+    transform: none;
+  }
+}
