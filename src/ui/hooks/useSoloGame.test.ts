@@ -2,7 +2,8 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { orderedDeck } from "../../engine/testkit";
 import { getLegalHands } from "../../engine/placement";
-import { AI, HUMAN, REVEAL_STEP_MS, useGame } from "./useGame";
+import { REVEAL_STEP_MS } from "./useRevealPacer";
+import { AI, HUMAN, useSoloGame } from "./useSoloGame";
 
 // jsdom has no <audio>; stub it so the sfx manager is a silent no-op.
 beforeEach(() => {
@@ -47,10 +48,10 @@ function flushUntil(pred: () => boolean, rounds = 10) {
   }
 }
 
-describe("useGame (solo)", () => {
+describe("useSoloGame", () => {
   it("draw() stages the top deck card as pendingCard", () => {
     const deck = orderedDeck();
-    const { result } = renderHook(() => useGame({ deck, firstTurn: HUMAN }));
+    const { result } = renderHook(() => useSoloGame({ deck, firstTurn: HUMAN }));
 
     expect(result.current.state.pendingCard).toBeNull();
     act(() => result.current.draw());
@@ -60,7 +61,7 @@ describe("useGame (solo)", () => {
 
   it("after the human ends a turn, the AI plays its own and hands control back", () => {
     const { result } = renderHook(() =>
-      useGame({ deck: orderedDeck(), firstTurn: HUMAN }),
+      useSoloGame({ deck: orderedDeck(), firstTurn: HUMAN }),
     );
 
     act(() => result.current.draw());
@@ -79,7 +80,7 @@ describe("useGame (solo)", () => {
 
   it("plays a whole game: placing -> replace -> auto reveal -> result", () => {
     const { result } = renderHook(() =>
-      useGame({ deck: orderedDeck(), firstTurn: HUMAN }),
+      useSoloGame({ deck: orderedDeck(), firstTurn: HUMAN }),
     );
 
     // Placing: 25 human cards, each on the lowest legal hand. Between each the
@@ -104,11 +105,15 @@ describe("useGame (solo)", () => {
     expect(result.current.state.phase).toBe("result");
     expect(result.current.state.result).not.toBeNull();
     expect(["p1", "p2", "draw"]).toContain(result.current.state.result!.winner);
+
+    // The append-only log grew alongside the derived state: 25 draws + 25
+    // end-turns per seat, 2 replace-draws + 2 replaces, 5 reveal steps.
+    expect(result.current.getEvents().length).toBe(109);
   });
 
   it("advances the reveal one hand per REVEAL_STEP_MS", () => {
     const { result } = renderHook(() =>
-      useGame({ deck: orderedDeck(), firstTurn: HUMAN }),
+      useSoloGame({ deck: orderedDeck(), firstTurn: HUMAN }),
     );
     for (let i = 0; i < 25; i++) {
       act(() => result.current.draw());
