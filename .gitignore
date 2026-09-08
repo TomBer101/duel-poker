@@ -15,6 +15,11 @@ dist-ssr
 .env.local
 .env.*.local
 
+# graphify — generated knowledge graph. Regenerate with `graphify update .`
+# (skill + config are committed under .claude/). Kept out of version control
+# on this small project so code edits don't produce large churny diffs.
+graphify-out/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

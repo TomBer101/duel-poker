@@ -413,6 +413,46 @@ Polished, playable game ready to share with friends.
 
 ---
 
+## Knowledge Graph (graphify)
+
+This repo is also the developer's proof-of-concept for [graphify](https://github.com/safishamsi/graphify):
+a tool that turns the codebase + docs into a persistent, queryable knowledge graph
+(god nodes, community detection, cross-file relationships).
+
+### Outputs
+
+`graphify-out/` (committed) holds:
+
+- `graph.html` — interactive graph, open in any browser
+- `GRAPH_REPORT.md` — audit report: god nodes, surprising connections, knowledge gaps
+- `graph.json` — raw graph data for `graphify query` / `path` / `explain`
+
+### Working with it
+
+- Codebase questions: `graphify query "<question>"` before grep — returns a scoped
+  subgraph, usually much smaller than raw source browsing.
+- Relationships: `graphify path "<A>" "<B>"`. Focused concept: `graphify explain "<X>"`.
+- After changing code: `graphify update .` (AST-only, no LLM cost) to keep the graph
+  current. Doc/spec changes need a fuller `/graphify --update`.
+- The project is wired for always-on use: `.claude/settings.json` PreToolUse hooks and a
+  `## graphify` section in `CLAUDE.md` steer Claude Code to the graph automatically.
+
+### POC question to validate against
+
+The first build (313 nodes, 16 communities) surfaced this as the single question the
+graph is uniquely positioned to answer — use it to sanity-check that graphify's
+cross-community bridges match reality as the app grows:
+
+> **Why does `chinese-poker-spec-v2` connect the "Layering Architecture & Crypto Design"
+> community to both "Implementation Plan Roadmap" and "CLAUDE.md Project Conventions"?**
+>
+> (The spec is a high-betweenness bridge node — it is the shared source that the strict
+> `engine → ai → crypto → net → ui` layering, this plan's phase order, and the CLAUDE.md
+> rules all derive from. If a future build breaks that bridge, the three views of the
+> architecture have drifted apart.)
+
+---
+
 ## Notes for AI Assistants Picking This Up
 
 - **Read the spec first** (`chinese-poker-spec-v2.md`) — it has all design decisions and rationale.
