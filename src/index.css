@@ -9,6 +9,8 @@
   --felt: #0f1216;
   --felt-raised: #171d24;
   --line: #2a323d;
+  --accent: #6ea8fe;
+  --accent-strong: #3d7bf7;
 
   /* Deck suit colours. Currently classic two-colour (♠♣ black, ♥♦ red).
      For a four-colour deck set --suit-diamond and --suit-club to their own
@@ -23,6 +25,12 @@
   --card-back: #12233b;
   --card-back-line: #2f5c8f;
   --card-radius: 8px;
+
+  /* Card width scale — the single source of truth for both Card and Hand.
+     Height is always width * 7/5. */
+  --cw-sm: clamp(2.1rem, 6vw, 2.7rem);
+  --cw-md: clamp(3rem, 13.5vw, 4.4rem);
+  --cw-lg: 6rem;
 }
 
 body {

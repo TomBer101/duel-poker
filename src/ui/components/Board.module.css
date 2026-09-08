@@ -1,0 +1,45 @@
+.board {
+  flex: 1;
+  width: 100%;
+  max-width: 44rem;
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: clamp(1rem, 5vh, 2.75rem);
+  padding: clamp(0.75rem, 3vw, 1.5rem);
+  padding-bottom: max(clamp(0.75rem, 3vw, 1.5rem), env(safe-area-inset-bottom));
+}
+
+.row {
+  display: flex;
+  justify-content: center;
+  gap: clamp(0.3rem, 1.8vw, 0.9rem);
+}
+
+.center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.9rem;
+}
+
+.deck {
+  width: var(--cw-sm);
+  aspect-ratio: 5 / 7;
+  display: grid;
+  place-items: center;
+  border-radius: var(--card-radius);
+  background: linear-gradient(160deg, var(--card-back), #0c1626);
+  border: 1px solid var(--card-back-line);
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: #cde0ff;
+}
+
+.turn {
+  margin: 0;
+  font-weight: 600;
+  color: #c8d0dc;
+  min-width: 12ch;
+}

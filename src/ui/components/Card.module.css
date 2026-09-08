@@ -1,15 +1,15 @@
 .card {
-  --cw: clamp(2.75rem, 8.5vw, 4.25rem);
+  --cw: var(--cw-md);
   position: relative;
   width: var(--cw);
   aspect-ratio: 5 / 7;
   flex: none;
 }
 .sm {
-  --cw: clamp(2rem, 6vw, 2.6rem);
+  --cw: var(--cw-sm);
 }
 .lg {
-  --cw: 6rem;
+  --cw: var(--cw-lg);
 }
 
 .flip {

@@ -1,0 +1,51 @@
+.hand {
+  --cw: var(--cw-md);
+  /* Visible strip of an overlapped card: enough to clear its full
+     top-left rank + suit corner. */
+  --peek: calc(var(--cw) * 0.58);
+
+  position: relative;
+  width: var(--cw);
+  /* Reserve the full 5-card stacked height so the board never shifts as
+     cards land (first card full height, each later card adds one peek). */
+  min-height: calc(var(--cw) * 1.4 + var(--peek) * 4);
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--felt-raised) 35%, transparent);
+  outline: 1.5px solid transparent;
+  outline-offset: 2px;
+  transition:
+    outline-color 0.15s,
+    background 0.15s,
+    transform 0.15s;
+}
+.sm {
+  --cw: var(--cw-sm);
+}
+
+/* Stack: every card after the first slides up over the one before it,
+   leaving only its top strip (rank + suit) showing. */
+.hand > * + * {
+  margin-top: calc(var(--peek) - var(--cw) * 1.4);
+}
+
+/* Fill-evenly: this hand can take the next card. */
+.legal {
+  outline-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* A drag is happening but this hand is not a legal target. */
+.muted {
+  opacity: 0.4;
+}
+
+/* A dragged card is hovering a legal hand. */
+.dropActive {
+  outline-color: var(--accent);
+  transform: translateY(-4px) scale(1.03);
+}
