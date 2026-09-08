@@ -1,9 +1,27 @@
 @import "tailwindcss";
 
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
   --sans: system-ui, "Segoe UI", Roboto, sans-serif;
   font-family: var(--sans);
+
+  /* Table */
+  --felt: #0f1216;
+  --felt-raised: #171d24;
+  --line: #2a323d;
+
+  /* Four-colour deck. Swap these two lines for a classic red/black deck:
+     --suit-diamond: var(--suit-heart); --suit-club: var(--suit-spade); */
+  --suit-spade: #1f2430;
+  --suit-heart: #d11f3d;
+  --suit-diamond: #1f6fb2;
+  --suit-club: #1f8a4c;
+
+  --card-face: #f7f7f4;
+  --card-face-ink: #1f2430;
+  --card-back: #12233b;
+  --card-back-line: #2f5c8f;
+  --card-radius: 8px;
 }
 
 body {
@@ -19,4 +37,106 @@ body {
   min-height: 100svh;
   display: flex;
   flex-direction: column;
+}
+
+/* ---------------------------------------------------------------- Card -- */
+
+.card {
+  --cw: clamp(2.75rem, 8.5vw, 4.25rem);
+  position: relative;
+  width: var(--cw);
+  aspect-ratio: 5 / 7;
+  flex: none;
+}
+.card--sm {
+  --cw: clamp(2rem, 6vw, 2.6rem);
+}
+.card--lg {
+  --cw: 6rem;
+}
+
+.card__flip {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+}
+
+.card__face {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+  border-radius: var(--card-radius);
+  overflow: hidden;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.45),
+    0 4px 10px rgba(0, 0, 0, 0.25);
+}
+.card__face--front {
+  background: var(--card-face);
+  color: var(--suit, var(--card-face-ink));
+}
+.card__face--back {
+  transform: rotateY(180deg);
+  background:
+    repeating-linear-gradient(
+      45deg,
+      transparent 0 6px,
+      rgba(47, 92, 143, 0.28) 6px 12px
+    ),
+    linear-gradient(160deg, var(--card-back), #0c1626);
+  border: 1px solid var(--card-back-line);
+}
+
+.card__corner {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 0.92;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.card__corner--tl {
+  top: 6%;
+  left: 8%;
+}
+.card__corner--br {
+  right: 8%;
+  bottom: 6%;
+  transform: rotate(180deg);
+}
+.card__rank {
+  font-size: calc(var(--cw) * 0.34);
+}
+.card__suit {
+  font-size: calc(var(--cw) * 0.24);
+}
+.card__pip {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: calc(var(--cw) * 0.62);
+  opacity: 0.15;
+}
+.card__badge {
+  position: absolute;
+  top: 6%;
+  right: 8%;
+  font-size: calc(var(--cw) * 0.28);
+  opacity: 0.85;
+}
+
+.card--interactive {
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+.card--interactive:hover {
+  transform: translateY(-6%) scale(1.06);
+  z-index: 5;
+}
+@media (prefers-reduced-motion: reduce) {
+  .card--interactive:hover {
+    transform: none;
+  }
 }
