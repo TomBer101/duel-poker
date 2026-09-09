@@ -1,4 +1,5 @@
 import { useDroppable } from "@dnd-kit/core";
+import type { ReactNode } from "react";
 import type { GameState, Hand as HandT } from "../../engine/types";
 import { AI, HUMAN } from "../hooks/useSoloGame";
 import { Hand } from "./Hand";
@@ -12,6 +13,8 @@ export type BoardProps = {
   dragging?: boolean;
   /** Opponent hands with index < this render face-up (reveal sequence). */
   reveal?: number;
+  /** Action content shown beside the draw pile — the draw button or drawn card. */
+  children?: ReactNode;
 };
 
 function turnText(state: GameState): string {
@@ -38,6 +41,7 @@ export function Board({
   legalHands = [],
   dragging = false,
   reveal = 0,
+  children,
 }: BoardProps) {
   const cardsLeft = 52 - state.drawCount;
 
@@ -62,6 +66,7 @@ export function Board({
         >
           {cardsLeft}
         </div>
+        {children && <div className={styles.action}>{children}</div>}
         <p className={styles.turn}>{turnText(state)}</p>
       </div>
 

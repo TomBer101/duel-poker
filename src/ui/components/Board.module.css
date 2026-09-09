@@ -25,9 +25,18 @@
 
 .center {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: center;
-  gap: 0.9rem;
+  gap: 0.6rem 1rem;
+  min-height: calc(var(--cw-md) * 1.4); /* reserve room for the drawn card */
+}
+
+/* Where the drawn card / draw button lives — right beside the deck. */
+.action {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
 }
 
 .deck {

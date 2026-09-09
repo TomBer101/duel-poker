@@ -8,6 +8,7 @@ export const DRAWN_CARD_ID = "drawn-card";
 
 export type DrawnCardProps = {
   card: CardT;
+  size?: "md" | "lg";
   /** Not the human's moment to place — show it but don't let it drag. */
   disabled?: boolean;
 };
@@ -17,7 +18,7 @@ export type DrawnCardProps = {
  * single draggable source; {@link useDragPlacement} turns a drop on a hand into
  * a placement.
  */
-export function DrawnCard({ card, disabled }: DrawnCardProps) {
+export function DrawnCard({ card, size = "md", disabled }: DrawnCardProps) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: DRAWN_CARD_ID,
     disabled,
@@ -30,7 +31,7 @@ export function DrawnCard({ card, disabled }: DrawnCardProps) {
       {...listeners}
       {...attributes}
     >
-      <Card card={card} size="lg" interactive={!disabled} />
+      <Card card={card} size={size} interactive={!disabled} />
       {!disabled && <span className={styles.caption}>drag to a hand</span>}
     </div>
   );

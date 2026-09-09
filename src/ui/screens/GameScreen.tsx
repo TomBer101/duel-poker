@@ -39,25 +39,14 @@ export function GameScreen() {
           legalHands={g.legalHands}
           dragging={drag.dragging}
           reveal={revealCount}
-        />
-
-        <div className={styles.tray}>
-          {drag.hint && (
-            <p role="status" className={styles.hint}>
-              {drag.hint}
-            </p>
-          )}
-
-          {g.aiThinking && <p className={styles.status}>Opponent is playing…</p>}
-
+        >
           {g.canDraw && (
-            <button className={styles.action} onClick={drawCard}>
-              {placing ? "Draw a card" : "Draw a card to swap"}
+            <button className={styles.draw} onClick={drawCard}>
+              {placing ? "Draw" : "Draw to swap"}
             </button>
           )}
-
           {g.isHumanTurn && pending && (
-            <div className={styles.pendingRow}>
+            <>
               <DrawnCard card={pending} />
               {!placing && (
                 <button
@@ -67,9 +56,15 @@ export function GameScreen() {
                   Keep my hands
                 </button>
               )}
-            </div>
+            </>
           )}
-        </div>
+        </Board>
+
+        {drag.hint && (
+          <p role="status" className={styles.hint}>
+            {drag.hint}
+          </p>
+        )}
 
         {state.phase === "result" && state.result && (
           <div className={styles.result} role="dialog" aria-label="Game result">
@@ -77,14 +72,14 @@ export function GameScreen() {
             <p>
               {state.result.wins.p1} – {state.result.wins.p2}
             </p>
-            <button className={styles.action} onClick={g.playAgain}>
+            <button className={styles.draw} onClick={g.playAgain}>
               Play again
             </button>
           </div>
         )}
 
         <DragOverlay dropAnimation={null}>
-          {drag.dragging && pending ? <Card card={pending} size="lg" /> : null}
+          {drag.dragging && pending ? <Card card={pending} size="md" /> : null}
         </DragOverlay>
       </div>
     </DndContext>
