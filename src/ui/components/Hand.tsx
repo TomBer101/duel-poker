@@ -15,6 +15,8 @@ export type HandProps = {
   muted?: boolean;
   /** A dragged card is currently hovering this hand. */
   dropActive?: boolean;
+  /** Reveal-phase: show this hand's face-down card face-up. */
+  reveal?: boolean;
   className?: string;
 };
 
@@ -31,6 +33,7 @@ export function Hand({
   legal,
   muted,
   dropActive,
+  reveal,
   className,
 }: HandProps) {
   return (
@@ -48,6 +51,10 @@ export function Hand({
     >
       {cards.map((pc, i) => {
         if (pc.faceUp) {
+          return <Card key={i} card={pc.card} size={size} />;
+        }
+        // The reveal flips every face-down card that has a known value.
+        if (reveal && pc.card) {
           return <Card key={i} card={pc.card} size={size} />;
         }
         // Face-down: your own card shows a lock (value still in its a11y

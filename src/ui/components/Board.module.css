@@ -13,8 +13,14 @@
 
 .row {
   display: flex;
+  align-items: flex-start;
   justify-content: center;
   gap: clamp(0.3rem, 1.8vw, 0.9rem);
+}
+
+.drop {
+  flex: none;
+  display: flex;
 }
 
 .center {

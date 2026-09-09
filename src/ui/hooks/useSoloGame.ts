@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { CARDS_PER_HAND } from "../../engine/constants";
 import { makeDeck, otherPlayer } from "../../engine/deck";
 import { getLegalHands, isFaceDownPlacement } from "../../engine/placement";
 import type { Card, GameEvent, GameState, PlayerId } from "../../engine/types";
@@ -27,8 +28,10 @@ export type SoloGameOptions = {
 export type SoloGame = {
   state: GameState;
   getEvents: () => readonly GameEvent[];
-  /** Legal hand indices for the human's next placement (empty off-turn). */
+  /** Hand indices the pending card may legally land on (empty off-turn). */
   legalHands: number[];
+  /** The human may draw a card right now (their turn, nothing pending). */
+  canDraw: boolean;
   isHumanTurn: boolean;
   /** True while the AI is mid-move — freeze the board. */
   aiThinking: boolean;
@@ -90,6 +93,20 @@ export function useSoloGame(opts: SoloGameOptions = {}): SoloGame {
     state.turn === HUMAN &&
     (state.phase === "placing" || state.phase === "replace");
 
+  // Which hands the dragged card may legally land on right now.
+  // Placing: the fill-evenly rule. Replace: any hand whose face-down 5th
+  // card can be swapped (all of them, once placing is done).
+  const legalHands = !isHumanTurn
+    ? []
+    : state.phase === "replace"
+      ? state.hands[HUMAN].flatMap((h, i) => {
+          const fifth = h.cards[CARDS_PER_HAND - 1];
+          return fifth && !fifth.faceUp ? [i] : [];
+        })
+      : getLegalHands(state.hands[HUMAN]);
+
+  const canDraw = isHumanTurn && state.pendingCard === null;
+
   function draw() {
     if (state.phase !== "placing" || state.turn !== HUMAN || state.pendingCard) return;
     dispatch({ type: "DRAW", by: HUMAN, card: deck.current[state.drawCount] });
@@ -130,7 +147,8 @@ export function useSoloGame(opts: SoloGameOptions = {}): SoloGame {
   return {
     state,
     getEvents,
-    legalHands: isHumanTurn ? getLegalHands(state.hands[HUMAN]) : [],
+    legalHands,
+    canDraw,
     isHumanTurn,
     aiThinking:
       state.turn === AI && (state.phase === "placing" || state.phase === "replace"),

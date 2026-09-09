@@ -1,12 +1,17 @@
-import type { GameState } from "../../engine/types";
+import { useDroppable } from "@dnd-kit/core";
+import type { GameState, Hand as HandT } from "../../engine/types";
 import { AI, HUMAN } from "../hooks/useSoloGame";
 import { Hand } from "./Hand";
 import styles from "./Board.module.css";
 
 export type BoardProps = {
   state: GameState;
-  /** Legal hand indices for the human's next placement (empty when off-turn). */
+  /** Hand indices the pending card may legally land on. */
   legalHands?: number[];
+  /** A card is being dragged — light legal targets, dim the rest. */
+  dragging?: boolean;
+  /** Opponent hands with index < this render face-up (reveal sequence). */
+  reveal?: number;
 };
 
 function turnText(state: GameState): string {
@@ -25,23 +30,36 @@ function turnText(state: GameState): string {
 
 /**
  * The whole table: the opponent's five hands on top (compact), a centre strip
- * with the draw pile and turn text, and your five hands below. Presentational —
- * it renders `GameState` and takes no actions; drag/drop and the action bar
- * wrap it from outside.
+ * with the draw pile and turn text, and your five hands below. Your hands are
+ * drop targets — the legal ones light up only while a card is being dragged.
  */
-export function Board({ state, legalHands = [] }: BoardProps) {
+export function Board({
+  state,
+  legalHands = [],
+  dragging = false,
+  reveal = 0,
+}: BoardProps) {
   const cardsLeft = 52 - state.drawCount;
 
   return (
     <div className={styles.board}>
       <section className={styles.row} aria-label="Opponent's hands">
         {state.hands[AI].map((hand, i) => (
-          <Hand key={i} cards={hand.cards} owner="opp" size="sm" />
+          <Hand
+            key={i}
+            cards={hand.cards}
+            owner="opp"
+            size="sm"
+            reveal={i < reveal}
+          />
         ))}
       </section>
 
       <div className={styles.center}>
-        <div className={styles.deck} aria-label={`Draw pile, ${cardsLeft} cards left`}>
+        <div
+          className={styles.deck}
+          aria-label={`Draw pile, ${cardsLeft} cards left`}
+        >
           {cardsLeft}
         </div>
         <p className={styles.turn}>{turnText(state)}</p>
@@ -49,14 +67,40 @@ export function Board({ state, legalHands = [] }: BoardProps) {
 
       <section className={styles.row} aria-label="Your hands">
         {state.hands[HUMAN].map((hand, i) => (
-          <Hand
+          <DropHand
             key={i}
-            cards={hand.cards}
-            owner="you"
+            index={i}
+            hand={hand}
             legal={legalHands.includes(i)}
+            dragging={dragging}
           />
         ))}
       </section>
+    </div>
+  );
+}
+
+function DropHand({
+  index,
+  hand,
+  legal,
+  dragging,
+}: {
+  index: number;
+  hand: HandT;
+  legal: boolean;
+  dragging: boolean;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: `hand-${index}` });
+  return (
+    <div ref={setNodeRef} className={styles.drop}>
+      <Hand
+        cards={hand.cards}
+        owner="you"
+        legal={dragging && legal}
+        muted={dragging && !legal}
+        dropActive={dragging && legal && isOver}
+      />
     </div>
   );
 }
