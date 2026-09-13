@@ -78,8 +78,10 @@ export function replay(initial: GameState, events: GameEvent[]): GameState {
  * Opening deal: one face-up card into each of a player's 5 hands (10 cards
  * total), before any turn-by-turn drawing starts. Must be the very first
  * thing to happen in a game — `drawCount` is still 0, every hand still empty.
- * Consumes 10 of the 50 cards the game will draw; the remaining 40 arrive one
- * at a time via DRAW/TIMEOUT/REPLACE_DRAW, same as before.
+ * Consumes 10 of the 50 cards that fill the 10 hands; the remaining 40 arrive
+ * one at a time via DRAW/TIMEOUT (same as before), and the deck's last 2 cards
+ * are drawn later still, one per player, via REPLACE_DRAW in the replace
+ * phase — the full 52-card deck is used over the course of a game.
  */
 function applyDeal(state: GameState, cards: Record<PlayerId, Card[]>): GameState {
   assert(state.phase === "placing", `cannot DEAL during phase "${state.phase}"`);

@@ -125,6 +125,10 @@ describe("useSoloGame", () => {
     act(() => result.current.replace(null));
     flush();
 
+    // The whole 52-card deck is used: 10 dealt + 40 drawn while placing, then
+    // one more replace-phase draw per player for the last 2 cards.
+    expect(result.current.state.drawCount).toBe(52);
+
     // Reveal auto-advances; flushing all timers runs every 3s beat.
     expect(["reveal", "result"]).toContain(result.current.state.phase);
     flush();
