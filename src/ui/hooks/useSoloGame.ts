@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { CARDS_PER_HAND } from "../../engine/constants";
+import { CARDS_PER_HAND, HANDS_PER_PLAYER } from "../../engine/constants";
 import { makeDeck, otherPlayer } from "../../engine/deck";
 import { getLegalHands, isFaceDownPlacement } from "../../engine/placement";
 import type { Card, GameEvent, GameState, PlayerId } from "../../engine/types";
@@ -75,6 +75,29 @@ export function useSoloGame(opts: SoloGameOptions = {}): SoloGame {
     mode: "solo",
     firstTurn,
   });
+
+  // Opening deal: one face-up card per hand, before any turn-by-turn drawing.
+  // `drawCount === 0` is true exactly once per game (fresh mount or right
+  // after a REMATCH resets state). The `dealt` ref (not state) guards against
+  // StrictMode's dev-only double-invoke of a fresh effect: both invocations
+  // share the same stale `state` closure, so a state-only check would fire
+  // DEAL twice against drawCount 0 and the second would fail its own assert.
+  const dealt = useRef(false);
+  useEffect(() => {
+    if (state.phase !== "placing" || state.drawCount !== 0) {
+      dealt.current = false; // past the opening deal — ready for next REMATCH
+      return;
+    }
+    if (dealt.current) return;
+    dealt.current = true;
+    dispatch({
+      type: "DEAL",
+      cards: {
+        p1: deck.current.slice(0, HANDS_PER_PLAYER),
+        p2: deck.current.slice(HANDS_PER_PLAYER, HANDS_PER_PLAYER * 2),
+      },
+    });
+  }, [state.phase, state.drawCount, dispatch]);
 
   useSoloAi({ state, ai: AI, deck, dispatch });
   useRevealPacer(state, dispatch);

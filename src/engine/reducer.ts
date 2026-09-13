@@ -48,6 +48,8 @@ export function createInitialState({ mode, firstTurn = "p1" }: InitOptions): Gam
 
 export function gameReducer(state: GameState, event: GameEvent): GameState {
   switch (event.type) {
+    case "DEAL":
+      return applyDeal(state, event.cards);
     case "DRAW":
       return applyDraw(state, event.by, event.card);
     case "END_TURN":
@@ -71,6 +73,33 @@ export function replay(initial: GameState, events: GameEvent[]): GameState {
 }
 
 // ---------------------------------------------------------------------------
+
+/**
+ * Opening deal: one face-up card into each of a player's 5 hands (10 cards
+ * total), before any turn-by-turn drawing starts. Must be the very first
+ * thing to happen in a game — `drawCount` is still 0, every hand still empty.
+ * Consumes 10 of the 50 cards the game will draw; the remaining 40 arrive one
+ * at a time via DRAW/TIMEOUT/REPLACE_DRAW, same as before.
+ */
+function applyDeal(state: GameState, cards: Record<PlayerId, Card[]>): GameState {
+  assert(state.phase === "placing", `cannot DEAL during phase "${state.phase}"`);
+  assert(state.drawCount === 0, "DEAL must be the first thing to happen in a game");
+  for (const player of ["p1", "p2"] as const) {
+    assert(
+      cards[player].length === HANDS_PER_PLAYER,
+      `DEAL must give ${player} exactly ${HANDS_PER_PLAYER} cards, one per hand`,
+    );
+  }
+
+  const dealtHands = (player: PlayerId): Hand[] =>
+    cards[player].map((card) => ({ cards: [{ card, faceUp: true }] }));
+
+  return {
+    ...state,
+    hands: { p1: dealtHands("p1"), p2: dealtHands("p2") },
+    drawCount: HANDS_PER_PLAYER * 2,
+  };
+}
 
 function applyDraw(state: GameState, by: PlayerId, card: Card): GameState {
   assert(state.phase === "placing", `cannot DRAW during phase "${state.phase}"`);

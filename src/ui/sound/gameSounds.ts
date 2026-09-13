@@ -1,5 +1,17 @@
+import { HANDS_PER_PLAYER } from "../../engine/constants";
 import type { GameEvent, GameResult, PlayerId } from "../../engine/types";
 import { sfx } from "./useSfx";
+
+/** Gap between each thunk of the opening deal. */
+const DEAL_STAGGER_MS = 90;
+
+/** 10 staggered `card-place` thunks — one per dealt card, dealer-style. */
+function playDealSfx(): void {
+  const count = HANDS_PER_PLAYER * 2;
+  for (let i = 0; i < count; i++) {
+    setTimeout(() => sfx.play("card-place"), i * DEAL_STAGGER_MS);
+  }
+}
 
 /**
  * Play the sound effect that belongs to a game event — whoever caused it, in
@@ -8,6 +20,9 @@ import { sfx } from "./useSfx";
  */
 export function playEventSfx(event: GameEvent): void {
   switch (event.type) {
+    case "DEAL":
+      playDealSfx();
+      break;
     case "DRAW":
     case "REPLACE_DRAW":
       sfx.play("card-draw");

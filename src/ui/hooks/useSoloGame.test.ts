@@ -1,4 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { orderedDeck } from "../../engine/testkit";
 import { getLegalHands } from "../../engine/placement";
@@ -49,14 +50,38 @@ function flushUntil(pred: () => boolean, rounds = 10) {
 }
 
 describe("useSoloGame", () => {
-  it("draw() stages the top deck card as pendingCard", () => {
+  it("deals one face-up card per hand before any turn is taken", () => {
+    const deck = orderedDeck();
+    const { result } = renderHook(() => useSoloGame({ deck, firstTurn: HUMAN }));
+
+    expect(result.current.state.drawCount).toBe(10);
+    expect(result.current.state.hands[HUMAN].map((h) => h.cards)).toEqual(
+      deck.slice(0, 5).map((c) => [{ card: c, faceUp: true }]),
+    );
+    expect(result.current.state.hands[AI].map((h) => h.cards)).toEqual(
+      deck.slice(5, 10).map((c) => [{ card: c, faceUp: true }]),
+    );
+  });
+
+  it("deals exactly once under StrictMode's dev double-invoke of mount effects", () => {
+    // main.tsx renders the whole app in <StrictMode>, which double-invokes a
+    // fresh effect body against the same pre-render `state` closure. A naive
+    // state-only guard dispatches DEAL twice and the second throws.
+    const deck = orderedDeck();
+    const { result } = renderHook(() => useSoloGame({ deck, firstTurn: HUMAN }), {
+      wrapper: StrictMode,
+    });
+    expect(result.current.state.drawCount).toBe(10);
+  });
+
+  it("draw() stages the next deck card (after the opening deal) as pendingCard", () => {
     const deck = orderedDeck();
     const { result } = renderHook(() => useSoloGame({ deck, firstTurn: HUMAN }));
 
     expect(result.current.state.pendingCard).toBeNull();
     act(() => result.current.draw());
-    expect(result.current.state.pendingCard).toEqual(deck[0]);
-    expect(result.current.state.drawCount).toBe(1);
+    expect(result.current.state.pendingCard).toEqual(deck[10]);
+    expect(result.current.state.drawCount).toBe(11);
   });
 
   it("after the human ends a turn, the AI plays its own and hands control back", () => {
@@ -75,17 +100,18 @@ describe("useSoloGame", () => {
       (n, h) => n + h.cards.length,
       0,
     );
-    expect(aiCards).toBe(1);
+    expect(aiCards).toBe(6); // 5 from the opening deal (1/hand) + 1 from this turn
   });
 
-  it("plays a whole game: placing -> replace -> auto reveal -> result", () => {
+  it("plays a whole game: deal -> placing -> replace -> auto reveal -> result", () => {
     const { result } = renderHook(() =>
       useSoloGame({ deck: orderedDeck(), firstTurn: HUMAN }),
     );
 
-    // Placing: 25 human cards, each on the lowest legal hand. Between each the
-    // AI takes its turn once timers are flushed.
-    for (let i = 0; i < 25; i++) {
+    // Each hand already holds its dealt card, so placing needs 4 more per
+    // hand (20 per seat), not 5. Between each the AI takes its turn once
+    // timers are flushed.
+    for (let i = 0; i < 20; i++) {
       act(() => result.current.draw());
       const hand = getLegalHands(result.current.state.hands[HUMAN])[0];
       act(() => result.current.placePending(hand));
@@ -106,16 +132,17 @@ describe("useSoloGame", () => {
     expect(result.current.state.result).not.toBeNull();
     expect(["p1", "p2", "draw"]).toContain(result.current.state.result!.winner);
 
-    // The append-only log grew alongside the derived state: 25 draws + 25
-    // end-turns per seat, 2 replace-draws + 2 replaces, 5 reveal steps.
-    expect(result.current.getEvents().length).toBe(109);
+    // The append-only log grew alongside the derived state: 1 DEAL, then
+    // 20 draws + 20 end-turns per seat, 2 replace-draws + 2 replaces, 5
+    // reveal steps.
+    expect(result.current.getEvents().length).toBe(90);
   });
 
   it("advances the reveal one hand per REVEAL_STEP_MS", () => {
     const { result } = renderHook(() =>
       useSoloGame({ deck: orderedDeck(), firstTurn: HUMAN }),
     );
-    for (let i = 0; i < 25; i++) {
+    for (let i = 0; i < 20; i++) {
       act(() => result.current.draw());
       const hand = getLegalHands(result.current.state.hands[HUMAN])[0];
       act(() => result.current.placePending(hand));

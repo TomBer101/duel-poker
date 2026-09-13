@@ -7,6 +7,57 @@ import { autoPlacePlacingPhase, orderedDeck } from "./testkit";
 const solo = () => createInitialState({ mode: "solo" });
 const AH: Card = { suit: "Hearts", rank: 14 };
 
+const openingDeal = (deck: Card[]): GameEvent => ({
+  type: "DEAL",
+  cards: { p1: deck.slice(0, 5), p2: deck.slice(5, 10) },
+});
+
+describe("DEAL", () => {
+  it("gives each hand one face-up card and advances drawCount by 10", () => {
+    const deck = orderedDeck();
+    const s = gameReducer(solo(), openingDeal(deck));
+
+    expect(s.phase).toBe("placing");
+    expect(s.drawCount).toBe(10);
+    expect(s.hands.p1.map((h) => h.cards)).toEqual(
+      deck.slice(0, 5).map((c) => [{ card: c, faceUp: true }]),
+    );
+    expect(s.hands.p2.map((h) => h.cards)).toEqual(
+      deck.slice(5, 10).map((c) => [{ card: c, faceUp: true }]),
+    );
+    // Fill-evenly is still satisfied: every hand has exactly one card, so
+    // all five are legal for the next placement.
+    expect(getLegalHands(s.hands.p1)).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it("play continues from the dealt state — DRAW/END_TURN pick up at card 11", () => {
+    const deck = orderedDeck();
+    let s = gameReducer(solo(), openingDeal(deck));
+    s = gameReducer(s, { type: "DRAW", by: "p1", card: deck[10] });
+    expect(s.pendingCard).toEqual(deck[10]);
+    s = gameReducer(s, { type: "END_TURN", by: "p1", handIndex: 0, faceDown: false });
+    expect(s.hands.p1[0].cards.map((pc) => pc.card)).toEqual([deck[0], deck[10]]);
+    expect(s.drawCount).toBe(11);
+  });
+
+  it("rejects a DEAL that isn't the very first thing to happen", () => {
+    const deck = orderedDeck();
+    let s = gameReducer(solo(), { type: "DRAW", by: "p1", card: deck[0] });
+    s = gameReducer(s, { type: "END_TURN", by: "p1", handIndex: 0, faceDown: false });
+    expect(() => gameReducer(s, openingDeal(deck))).toThrow();
+  });
+
+  it("rejects a DEAL that doesn't give exactly one card per hand", () => {
+    const deck = orderedDeck();
+    expect(() =>
+      gameReducer(solo(), {
+        type: "DEAL",
+        cards: { p1: deck.slice(0, 4), p2: deck.slice(5, 10) },
+      }),
+    ).toThrow();
+  });
+});
+
 describe("createInitialState", () => {
   it("starts in the placing phase with empty hands", () => {
     const s = solo();

@@ -17,8 +17,9 @@ A two-player online Chinese Poker card game, built as an installable PWA (React 
 
 - 2 players, 1 shared deck of 52 cards
 - Each player builds **5 poker hands** of 5 cards each (50 cards drawn total from the deck)
-- Players take turns drawing one card from the deck and placing it into one of their 5 hands
-- **Placement constraint:** a player cannot add the (i+1)-th card to any hand until ALL 5 hands have i cards (fill evenly, player chooses order within each round)
+- **Opening deal:** before any turn-by-turn drawing, each player is dealt one face-up card into each of their 5 hands (10 cards total, 5 per player) — every hand starts at 1 card instead of empty
+- Players then take turns drawing one card from the deck and placing it into one of their 5 hands, same as before, until every hand holds 5 (1 dealt + 4 drawn each)
+- **Placement constraint:** a player cannot add the (i+1)-th card to any hand until ALL 5 hands have i cards (fill evenly, player chooses order within each round) — the opening deal itself satisfies this by giving every hand exactly 1 card at once
 - Cards 1–4 in each hand are placed **face-up** (visible to opponent)
 - The 5th card in each hand **must** be placed **face-down** (hidden until reveal)
 - After all hands are filled (25 cards each), each player may **replace** one face-down card with the next card drawn from the deck
