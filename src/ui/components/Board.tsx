@@ -1,12 +1,16 @@
 import { useDroppable } from "@dnd-kit/core";
 import type { ReactNode } from "react";
-import type { GameState, Hand as HandT } from "../../engine/types";
-import { AI, HUMAN } from "../hooks/useSoloGame";
+import { otherPlayer } from "../../engine/deck";
+import type { GameState, Hand as HandT, PlayerId } from "../../engine/types";
 import { Hand } from "./Hand";
 import styles from "./Board.module.css";
 
 export type BoardProps = {
   state: GameState;
+  /** Which seat this client is looking from — bottom row, "you" in the UI.
+   *  The other seat renders as "Opponent's hands" regardless of whether it's
+   *  the solo AI or another human in multiplayer. Defaults to "p1". */
+  you?: PlayerId;
   /** Hand indices the pending card may legally land on. */
   legalHands?: number[];
   /** A card is being dragged — light legal targets, dim the rest. */
@@ -17,11 +21,11 @@ export type BoardProps = {
   children?: ReactNode;
 };
 
-function turnText(state: GameState): string {
+function turnText(state: GameState, you: PlayerId): string {
   switch (state.phase) {
     case "placing":
     case "replace":
-      return state.turn === HUMAN ? "Your turn" : "Opponent thinking…";
+      return state.turn === you ? "Your turn" : "Opponent thinking…";
     case "reveal":
       return "Revealing…";
     case "result":
@@ -35,20 +39,26 @@ function turnText(state: GameState): string {
  * The whole table: the opponent's five hands on top (compact), a centre strip
  * with the draw pile and turn text, and your five hands below. Your hands are
  * drop targets — the legal ones light up only while a card is being dragged.
+ *
+ * Mode-agnostic: it only knows `state` and which seat is "you" (`you`). Solo
+ * and multiplayer both feed it the same way — this file has no idea an AI
+ * opponent exists.
  */
 export function Board({
   state,
+  you = "p1",
   legalHands = [],
   dragging = false,
   reveal = 0,
   children,
 }: BoardProps) {
+  const opponent = otherPlayer(you);
   const cardsLeft = 52 - state.drawCount;
 
   return (
     <div className={styles.board}>
       <section className={styles.row} aria-label="Opponent's hands">
-        {state.hands[AI].map((hand, i) => (
+        {state.hands[opponent].map((hand, i) => (
           <Hand
             key={i}
             cards={hand.cards}
@@ -67,11 +77,11 @@ export function Board({
           {cardsLeft}
         </div>
         {children && <div className={styles.action}>{children}</div>}
-        <p className={styles.turn}>{turnText(state)}</p>
+        <p className={styles.turn}>{turnText(state, you)}</p>
       </div>
 
       <section className={styles.row} aria-label="Your hands">
-        {state.hands[HUMAN].map((hand, i) => (
+        {state.hands[you].map((hand, i) => (
           <DropHand
             key={i}
             index={i}

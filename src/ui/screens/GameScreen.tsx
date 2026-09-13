@@ -4,12 +4,12 @@ import { Board } from "../components/Board";
 import { Card } from "../components/Card";
 import { DrawnCard } from "../components/DrawnCard";
 import { useDragPlacement } from "../hooks/useDragPlacement";
-import { HUMAN, useSoloGame } from "../hooks/useSoloGame";
+import { useSoloGame } from "../hooks/useSoloGame";
 import styles from "./GameScreen.module.css";
 
-function outcome(winner: PlayerId | "draw"): string {
+function outcome(winner: PlayerId | "draw", you: PlayerId): string {
   if (winner === "draw") return "It's a draw";
-  return winner === HUMAN ? "You win" : "You lose";
+  return winner === you ? "You win" : "You lose";
 }
 
 export function GameScreen() {
@@ -36,6 +36,7 @@ export function GameScreen() {
       <div className={styles.screen}>
         <Board
           state={state}
+          you={g.you}
           legalHands={g.legalHands}
           dragging={drag.dragging}
           reveal={revealCount}
@@ -68,7 +69,7 @@ export function GameScreen() {
 
         {state.phase === "result" && state.result && (
           <div className={styles.result} role="dialog" aria-label="Game result">
-            <h2>{outcome(state.result.winner)}</h2>
+            <h2>{outcome(state.result.winner, g.you)}</h2>
             <p>
               {state.result.wins.p1} – {state.result.wins.p2}
             </p>

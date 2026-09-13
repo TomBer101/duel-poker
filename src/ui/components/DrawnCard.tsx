@@ -9,14 +9,15 @@ export const DRAWN_CARD_ID = "drawn-card";
 export type DrawnCardProps = {
   card: CardT;
   size?: "md" | "lg";
-  /** Not the human's moment to place — show it but don't let it drag. */
+  /** Not the local player's moment to place — show it but don't let it drag. */
   disabled?: boolean;
 };
 
 /**
- * The card the human has just drawn, staged and waiting to be placed. It is the
- * single draggable source; {@link useDragPlacement} turns a drop on a hand into
- * a placement.
+ * The card the local player has just drawn, staged and waiting to be placed.
+ * It is the single draggable source; {@link useDragPlacement} turns a drop on
+ * a hand into a placement. Mode-agnostic — it has no notion of who or what the
+ * opponent is.
  */
 export function DrawnCard({ card, size = "md", disabled }: DrawnCardProps) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({

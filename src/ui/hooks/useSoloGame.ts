@@ -28,6 +28,9 @@ export type SoloGameOptions = {
 export type SoloGame = {
   state: GameState;
   getEvents: () => readonly GameEvent[];
+  /** Which seat is the local player's — the seam mode-agnostic UI (e.g.
+   *  `<Board you={g.you} />`) reads instead of importing HUMAN directly. */
+  you: PlayerId;
   /** Hand indices the pending card may legally land on (empty off-turn). */
   legalHands: number[];
   /** The human may draw a card right now (their turn, nothing pending). */
@@ -170,6 +173,7 @@ export function useSoloGame(opts: SoloGameOptions = {}): SoloGame {
   return {
     state,
     getEvents,
+    you: HUMAN,
     legalHands,
     canDraw,
     isHumanTurn,
