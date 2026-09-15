@@ -28,7 +28,7 @@ export function GameScreen() {
   // The engine only auto-places on timeout during the placing phase (there is
   // no replace-phase equivalent yet), so the countdown only runs there too —
   // showing one during replace with no teeth would be misleading.
-  const timerActive = g.isHumanTurn && placing;
+  const timerActive = g.isHumanTurn && placing && pending !== null;
   const secondsLeft = useTimer(timerActive, TURN_TIMEOUT_MS, g.timeout);
 
   const revealCount =
