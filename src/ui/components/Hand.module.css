@@ -30,9 +30,13 @@
 }
 
 /* Stack: every card after the first slides up over the one before it,
-   leaving only its top strip (rank + suit) showing. */
+   leaving only its top strip (rank + suit) showing. The transition is what
+   makes the reveal-phase collapse (below) animate instead of snapping —
+   placing a new card during play never changes an existing card's
+   margin-top, so it never fires outside of collapsing. */
 .hand > * + * {
   margin-top: calc(var(--peek) - var(--cw) * 1.4);
+  transition: margin-top 0.5s cubic-bezier(0.22, 0.85, 0.32, 1);
 }
 
 /* A drag is in progress and this hand can take the card. */
@@ -65,4 +69,50 @@
 .tie {
   outline-color: var(--tie);
   background: color-mix(in srgb, var(--tie) 12%, transparent);
+}
+
+/*
+ * A losing hand collapses: its cards slide into one tossed-aside pile
+ * instead of staying fanned — same margin-top trick as above, just aimed at
+ * full overlap (the bottom card's slot), plus a small per-card rotation and
+ * staggered delay so it reads as "tossed together" rather than a snap.
+ */
+.collapsed > * + * {
+  margin-top: calc(-1 * var(--cw) * 1.4);
+}
+.collapsed > *:nth-child(1) {
+  transform: rotate(-14deg) translate(-7px, -3px);
+  transition-delay: 0ms;
+}
+.collapsed > *:nth-child(2) {
+  transform: rotate(9deg) translate(6px, -1px);
+  transition-delay: 70ms;
+}
+.collapsed > *:nth-child(3) {
+  transform: rotate(-7deg) translate(-4px, 2px);
+  transition-delay: 140ms;
+}
+.collapsed > *:nth-child(4) {
+  transform: rotate(11deg) translate(5px, 1px);
+  transition-delay: 210ms;
+}
+.collapsed > *:nth-child(5) {
+  transform: rotate(-3deg);
+  transition-delay: 280ms;
+}
+.collapsed > * {
+  transition:
+    margin-top 0.5s cubic-bezier(0.22, 0.85, 0.32, 1),
+    transform 0.5s cubic-bezier(0.22, 0.85, 0.32, 1);
+  filter: saturate(0.75) brightness(0.94);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hand > * + *,
+  .collapsed > * {
+    transition: none;
+  }
+  .collapsed > * {
+    transform: none;
+  }
 }

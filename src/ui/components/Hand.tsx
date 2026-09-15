@@ -17,7 +17,11 @@ export type HandProps = {
   dropActive?: boolean;
   /** Reveal-phase: show the opponent's face-down card face-up. */
   reveal?: boolean;
-  /** Reveal-phase: this hand's own matchup outcome, once revealed. */
+  /**
+   * Reveal-phase: this hand's own matchup outcome, once revealed. A losing
+   * hand collapses — its cards slide together into one tossed-aside pile
+   * instead of staying fanned (see `.collapsed` in Hand.module.css).
+   */
   highlight?: "win" | "lose" | "tie";
   className?: string;
 };
@@ -51,6 +55,7 @@ export function Hand({
         dropActive && styles.dropActive,
         highlight === "win" && styles.win,
         highlight === "lose" && styles.lose,
+        highlight === "lose" && styles.collapsed,
         highlight === "tie" && styles.tie,
         className,
       )}

@@ -45,4 +45,20 @@ describe("Hand", () => {
     rerender(<Hand cards={[]} owner="you" legal />);
     expect(container.firstChild).toHaveAttribute("data-legal", "true");
   });
+
+  it("collapses the fan on a loss, but not on a win or a tie", () => {
+    const { rerender, container } = render(
+      <Hand cards={[up("AH")]} owner="you" highlight="win" />,
+    );
+    const hand = () => container.firstChild as HTMLElement;
+    expect(hand()).toHaveAttribute("data-highlight", "win");
+    expect(hand().className).not.toMatch(/collapsed/);
+
+    rerender(<Hand cards={[up("AH")]} owner="you" highlight="tie" />);
+    expect(hand().className).not.toMatch(/collapsed/);
+
+    rerender(<Hand cards={[up("AH")]} owner="you" highlight="lose" />);
+    expect(hand()).toHaveAttribute("data-highlight", "lose");
+    expect(hand().className).toMatch(/collapsed/);
+  });
 });
