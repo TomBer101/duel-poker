@@ -1,11 +1,15 @@
 import { motion, useReducedMotion } from "motion/react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
+import { useRef, useState } from "react";
 import type { Card as CardT, Suit } from "../../engine/types";
 import { cn } from "../cn";
 import { rankLabel, SUIT_META } from "../format";
 import styles from "./Card.module.css";
 
 export type CardSize = "sm" | "md" | "lg";
+
+/** Touch-and-hold duration before an `interactive` card enlarges. */
+const LONG_PRESS_MS = 2000;
 
 export type CardProps = {
   /**
@@ -14,12 +18,18 @@ export type CardProps = {
    * about it then reaches the DOM.
    */
   card?: CardT;
-  /** Show the back even though `card` is known (your own face-down 5th card). */
+  /** Show the back even though `card` is known — used for a card genuinely
+   *  unrevealed to this viewer (the opponent's 5th, before reveal). */
   faceDown?: boolean;
-  /** This is the viewer's own hidden card — adds a lock badge to the back. */
+  /**
+   * This is the viewer's own card that the *opponent* can't see (their 5th,
+   * pre-reveal). The viewer still sees its face — only a small badge marks it
+   * as hidden from the other side. Owners always know their own cards; only
+   * `faceDown` (without `mine`) hides a value from the viewer entirely.
+   */
   mine?: boolean;
   size?: CardSize;
-  /** Grow on hover. Off by default; on for the player's live hands. */
+  /** Enlarge on hover (desktop) / a ~2s touch-and-hold (mobile). */
   interactive?: boolean;
   className?: string;
   /** Override the computed accessible label. */
@@ -29,8 +39,9 @@ export type CardProps = {
 /**
  * A single playing card. Three visual states:
  * - face-up: `card` given, `faceDown` false — rank + suit in the deck's colours.
- * - your hidden card: `card` given, `faceDown` + `mine` — back with a lock.
- * - unknown card: no `card` — plain back.
+ * - your own hidden-from-opponent card: `card` + `mine` — shown face-up to you,
+ *   with a small badge; `faceDown` stays false since you can see it.
+ * - unknown-to-viewer card: no `card` (or `faceDown` with no `mine`) — plain back.
  *
  * Front and back are both mounted on a 3D-flipped container, so the reveal
  * sequence gets a real flip just by animating `faceDown` to false.
@@ -46,18 +57,25 @@ export function Card({
 }: CardProps) {
   const reduceMotion = useReducedMotion();
   const showBack = faceDown || !card;
+  const [pressed, setPressed] = useState(false);
+  const pressTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  const label =
-    ariaLabel ??
-    (showBack
-      ? mine && card
-        ? `your face-down ${describe(card)}`
-        : "hidden card"
-      : describe(card!));
+  const label = ariaLabel ?? computeLabel(card, showBack, mine);
 
   const frontStyle: CSSProperties | undefined = card
     ? ({ "--suit": `var(${SUIT_META[card.suit].cssVar})` } as CSSProperties)
     : undefined;
+
+  // Hover enlarges via CSS alone; touch has no hover state, so a hold past
+  // LONG_PRESS_MS toggles the same enlarged look via `.pressed`.
+  function onPointerDown(e: ReactPointerEvent) {
+    if (!interactive || e.pointerType !== "touch") return;
+    pressTimer.current = setTimeout(() => setPressed(true), LONG_PRESS_MS);
+  }
+  function endPress() {
+    clearTimeout(pressTimer.current);
+    setPressed(false);
+  }
 
   return (
     <div
@@ -66,10 +84,15 @@ export function Card({
         size === "sm" && styles.sm,
         size === "lg" && styles.lg,
         interactive && styles.interactive,
+        pressed && styles.pressed,
         className,
       )}
       role="img"
       aria-label={label}
+      onPointerDown={onPointerDown}
+      onPointerUp={endPress}
+      onPointerLeave={endPress}
+      onPointerCancel={endPress}
     >
       <motion.div
         className={styles.flip}
@@ -81,9 +104,18 @@ export function Card({
       >
         <div className={cn(styles.face, styles.faceFront)} style={frontStyle}>
           {card && <Face rank={card.rank} suit={card.suit} />}
+          {mine && !showBack && (
+            <span
+              className={styles.badge}
+              aria-hidden="true"
+              title="Hidden from your opponent"
+            >
+              🔒
+            </span>
+          )}
         </div>
         <div className={cn(styles.face, styles.faceBack)}>
-          {mine && (
+          {mine && showBack && (
             <span className={styles.badge} aria-hidden="true">
               🔒
             </span>
@@ -96,6 +128,12 @@ export function Card({
 
 function describe(card: CardT): string {
   return `${rankLabel(card.rank)} of ${card.suit}`;
+}
+
+function computeLabel(card: CardT | undefined, showBack: boolean, mine: boolean): string {
+  if (!card) return "hidden card";
+  if (mine) return `your ${describe(card)} (hidden from your opponent)`;
+  return showBack ? "hidden card" : describe(card);
 }
 
 function Face({ rank, suit }: { rank: number; suit: Suit }) {

@@ -39,6 +39,8 @@ function turnText(state: GameState, you: PlayerId): string {
  * The whole table: the opponent's five hands on top (compact), a centre strip
  * with the draw pile and turn text, and your five hands below. Your hands are
  * drop targets — the legal ones light up only while a card is being dragged.
+ * Your own face-down card is drawn visible to you (via `Hand`'s `owner="you"`
+ * handling) — only the opponent's is ever a genuine back.
  *
  * Mode-agnostic: it only knows `state` and which seat is "you" (`you`). Solo
  * and multiplayer both feed it the same way — this file has no idea an AI
@@ -76,7 +78,7 @@ export function Board({
         >
           {cardsLeft}
         </div>
-        {children && <div className={styles.action}>{children}</div>}
+        <div className={styles.action}>{children}</div>
         <p className={styles.turn}>{turnText(state, you)}</p>
       </div>
 

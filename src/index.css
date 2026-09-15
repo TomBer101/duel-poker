@@ -27,9 +27,11 @@
   --card-radius: 8px;
 
   /* Card width scale — the single source of truth for both Card and Hand.
-     Height is always width * 7/5. */
-  --cw-sm: clamp(2.1rem, 6vw, 2.7rem);
+     Height is always width * 7/5. --cw-sm (the opponent's compact row) is
+     pegged to a fraction of --cw-md so it scales with the viewport exactly
+     the same way the player's own cards do, just smaller. */
   --cw-md: clamp(3rem, 13.5vw, 4.4rem);
+  --cw-sm: clamp(2.4rem, calc(var(--cw-md) * 0.78), 3.6rem);
   --cw-lg: 6rem;
 }
 

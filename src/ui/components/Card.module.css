@@ -87,13 +87,16 @@
 .interactive {
   cursor: pointer;
   transition: transform 0.12s ease;
+  touch-action: manipulation; /* don't let the browser eat a long-press as a scroll/zoom gesture */
 }
-.interactive:hover {
+.interactive:hover,
+.interactive.pressed {
   transform: translateY(-6%) scale(1.06);
   z-index: 5;
 }
 @media (prefers-reduced-motion: reduce) {
-  .interactive:hover {
+  .interactive:hover,
+  .interactive.pressed {
     transform: none;
   }
 }

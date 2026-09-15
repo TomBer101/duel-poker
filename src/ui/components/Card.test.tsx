@@ -32,10 +32,27 @@ describe("Card", () => {
     expect(screen.queryByText("A")).toBeNull();
   });
 
-  it("your own face-down card: back with a lock, label still names the card", () => {
-    render(<Card card={TS} faceDown mine />);
-    expect(screen.getByRole("img")).toHaveAccessibleName("your face-down 10 of Spades");
+  it("your own hidden-from-opponent card: shown face-up to you, with a badge", () => {
+    render(<Card card={TS} mine />);
+    expect(screen.getByRole("img")).toHaveAccessibleName(
+      "your 10 of Spades (hidden from your opponent)",
+    );
     expect(screen.getByText("🔒")).toBeInTheDocument();
+    // The rank is genuinely visible — this is not a back render.
+    expect(screen.getAllByText("10").length).toBeGreaterThan(0);
+  });
+
+  it("still supports an explicit face-down + mine render (back with a lock)", () => {
+    render(<Card card={TS} faceDown mine />);
+    expect(screen.getByRole("img")).toHaveAccessibleName(
+      "your 10 of Spades (hidden from your opponent)",
+    );
+    // Exactly one badge (the back's) — the front face isn't showing, so it
+    // doesn't get one too. (Its rank text is still in the DOM, off-screen via
+    // the 3D flip, same as any face-up card's back is — that's not a leak:
+    // an opponent's genuinely-unknown card never receives a `card` prop at
+    // all, per the "hides the opponent's..." tests.)
+    expect(screen.getAllByText("🔒")).toHaveLength(1);
   });
 
   it("maps each suit to its own colour variable", () => {

@@ -23,23 +23,34 @@
   display: flex;
 }
 
+/*
+ * Three fixed columns (deck | action | turn text). Each column's width comes
+ * only from its own content, so the deck and the turn label never move when
+ * the middle column's content appears, disappears, or changes size — that
+ * used to make the whole strip visibly "jump" as a card was drawn or placed.
+ */
 .center {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: center;
   gap: 0.6rem 1rem;
-  min-height: calc(var(--cw-md) * 1.4); /* reserve room for the drawn card */
+  /* Reserve room for the tallest thing the middle column can ever hold: a
+     staged card plus its "drag to a hand" caption. */
+  min-height: calc(var(--cw-md) * 1.4 + 1.4rem);
 }
 
 /* Where the drawn card / draw button lives — right beside the deck. */
 .action {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.7rem;
+  justify-content: center;
+  justify-self: center;
+  gap: 0.6rem;
 }
 
 .deck {
+  justify-self: start;
   width: var(--cw-sm);
   aspect-ratio: 5 / 7;
   display: grid;
@@ -53,8 +64,9 @@
 }
 
 .turn {
+  justify-self: end;
+  text-align: right;
   margin: 0;
   font-weight: 600;
   color: #c8d0dc;
-  min-width: 12ch;
 }

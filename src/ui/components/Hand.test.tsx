@@ -25,10 +25,18 @@ describe("Hand", () => {
     expect(screen.queryByText("♣")).toBeNull();
   });
 
-  it("shows your own face-down card as a locked back that still names itself", () => {
+  it("shows your own face-down card face-up to you, badged as hidden from the opponent", () => {
     render(<Hand cards={[down("2C")]} owner="you" />);
-    expect(screen.getByLabelText("your face-down 2 of Clubs")).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("your 2 of Clubs (hidden from your opponent)"),
+    ).toBeInTheDocument();
     expect(screen.getByText("🔒")).toBeInTheDocument();
+    expect(screen.getAllByText("2").length).toBeGreaterThan(0);
+  });
+
+  it("reveals the opponent's face-down card once the reveal phase reaches it", () => {
+    render(<Hand cards={[down("2C")]} owner="opp" reveal />);
+    expect(screen.getByLabelText("2 of Clubs")).toBeInTheDocument();
   });
 
   it("flags a legal drop target", () => {
