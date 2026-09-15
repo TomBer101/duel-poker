@@ -1,0 +1,22 @@
+.drawn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  touch-action: none; /* let the touch sensor own the gesture */
+  cursor: grab;
+}
+.drawn:active {
+  cursor: grabbing;
+}
+
+/* The source fades while its copy rides the cursor in the DragOverlay. */
+.dragging {
+  opacity: 0.2;
+}
+
+.caption {
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  color: #8b93a1;
+}

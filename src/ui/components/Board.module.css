@@ -1,0 +1,50 @@
+.board {
+  flex: 1;
+  width: 100%;
+  max-width: 44rem;
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: clamp(1rem, 5vh, 2.75rem);
+  padding: clamp(0.75rem, 3vw, 1.5rem);
+  padding-bottom: max(clamp(0.75rem, 3vw, 1.5rem), env(safe-area-inset-bottom));
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: clamp(0.3rem, 1.8vw, 0.9rem);
+}
+
+.drop {
+  flex: none;
+  display: flex;
+}
+
+/*
+ * Three fixed columns (deck | action | turn text). Each column's width comes
+ * only from its own content, so the deck and the turn label never move when
+ * the middle column's content appears, disappears, or changes size — that
+ * used to make the whole strip visibly "jump" as a card was drawn or placed.
+ */
+.center {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.6rem 1rem;
+  /* Reserve room for the tallest thing the middle column can ever hold: a
+     staged card plus its "drag to a hand" caption. */
+  min-height: calc(var(--cw-md) * 1.4 + 1.4rem);
+}
+
+/* Where the drawn card / draw button lives — right beside the deck. */
+.action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  justify-self: center;
+  gap: 0.6rem;
+}

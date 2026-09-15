@@ -100,6 +100,7 @@ export type GameState = {
 // ---------------------------------------------------------------------------
 
 export type GameEvent =
+  | { type: "DEAL"; cards: Record<PlayerId, Card[]> }
   | { type: "DRAW"; by: PlayerId; card: Card }
   | { type: "END_TURN"; by: PlayerId; handIndex: number; faceDown: boolean }
   | { type: "TIMEOUT"; by: PlayerId; card: Card }

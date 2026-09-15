@@ -1,12 +1,28 @@
-import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import { describe, expect, it } from "vitest";
 import { HomeScreen } from "./HomeScreen";
 
-// Smoke test: also the canary that the UI test toolchain (jsdom + JSX transform
-// + jest-dom matchers) is wired up correctly.
 describe("HomeScreen", () => {
-  it("renders", () => {
-    render(<HomeScreen />);
-    expect(screen.getByText("Home Screen")).toBeInTheDocument();
+  it("links Play Solo to /solo", () => {
+    render(
+      <MemoryRouter>
+        <HomeScreen />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("link", { name: "Play Solo" })).toHaveAttribute(
+      "href",
+      "/solo",
+    );
+  });
+
+  it("leaves Create/Join Room disabled — no multiplayer yet", () => {
+    render(
+      <MemoryRouter>
+        <HomeScreen />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("button", { name: "Create Room" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Join Room" })).toBeDisabled();
   });
 });

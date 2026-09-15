@@ -1,0 +1,63 @@
+.screen {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100svh;
+  padding: 1.5rem;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  text-align: center;
+  width: min(24rem, 100%);
+}
+
+.title {
+  margin: 0;
+  font-size: clamp(2rem, 8vw, 2.6rem);
+  font-weight: 800;
+  color: #f2f4f8;
+}
+
+.subtitle {
+  margin: 0 0 1.5rem;
+  color: #8b93a1;
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  width: 100%;
+}
+
+.primary {
+  font: inherit;
+  font-size: 1.05rem;
+  font-weight: 650;
+  padding: 0.85rem 1.5rem;
+  border: 0;
+  border-radius: 12px;
+  background: var(--accent-strong);
+  color: #fff;
+  text-decoration: none;
+  cursor: pointer;
+}
+.primary:hover {
+  background: var(--accent);
+}
+
+.secondary {
+  font: inherit;
+  font-size: 0.95rem;
+  padding: 0.75rem 1.5rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: transparent;
+  color: #8b93a1;
+  cursor: not-allowed;
+}

@@ -1,0 +1,38 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.deck {
+  font: inherit;
+  width: var(--cw-sm);
+  aspect-ratio: 5 / 7;
+  display: grid;
+  place-items: center;
+  border-radius: var(--card-radius);
+  background: linear-gradient(160deg, var(--card-back), #0c1626);
+  border: 1px solid var(--card-back-line);
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: #cde0ff;
+  cursor: default;
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.15s;
+}
+
+.canDraw {
+  cursor: pointer;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.canDraw:hover {
+  transform: translateY(-4%) scale(1.05);
+}
+
+.hint {
+  font-size: 0.68rem;
+  color: #8b93a1;
+}
