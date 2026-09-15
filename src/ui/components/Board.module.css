@@ -48,25 +48,3 @@
   justify-self: center;
   gap: 0.6rem;
 }
-
-.deck {
-  justify-self: start;
-  width: var(--cw-sm);
-  aspect-ratio: 5 / 7;
-  display: grid;
-  place-items: center;
-  border-radius: var(--card-radius);
-  background: linear-gradient(160deg, var(--card-back), #0c1626);
-  border: 1px solid var(--card-back-line);
-  font-weight: 700;
-  font-size: 0.85rem;
-  color: #cde0ff;
-}
-
-.turn {
-  justify-self: end;
-  text-align: right;
-  margin: 0;
-  font-weight: 600;
-  color: #c8d0dc;
-}

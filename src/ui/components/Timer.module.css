@@ -1,0 +1,47 @@
+.timer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.label {
+  font-weight: 600;
+  color: #c8d0dc;
+}
+
+.clock {
+  min-width: 1.8em;
+  padding: 0.15em 0.5em;
+  border-radius: 999px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.panic {
+  background: color-mix(in srgb, #ff4d5e 22%, transparent);
+  color: #ff8a94;
+  animation: pulse 0.7s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.12);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panic {
+    animation: none;
+  }
+}

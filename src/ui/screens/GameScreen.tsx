@@ -1,10 +1,12 @@
 import { DndContext, DragOverlay } from "@dnd-kit/core";
+import { TURN_TIMEOUT_MS } from "../../engine/constants";
 import type { PlayerId } from "../../engine/types";
 import { Board } from "../components/Board";
 import { Card } from "../components/Card";
 import { DrawnCard } from "../components/DrawnCard";
 import { useDragPlacement } from "../hooks/useDragPlacement";
 import { useSoloGame } from "../hooks/useSoloGame";
+import { useTimer } from "../hooks/useTimer";
 import styles from "./GameScreen.module.css";
 
 function outcome(winner: PlayerId | "draw", you: PlayerId): string {
@@ -23,6 +25,12 @@ export function GameScreen() {
 
   const drag = useDragPlacement({ legalHands: g.legalHands, onPlace: place });
 
+  // The engine only auto-places on timeout during the placing phase (there is
+  // no replace-phase equivalent yet), so the countdown only runs there too —
+  // showing one during replace with no teeth would be misleading.
+  const timerActive = g.isHumanTurn && placing;
+  const secondsLeft = useTimer(timerActive, TURN_TIMEOUT_MS, g.timeout);
+
   const revealCount =
     state.phase === "reveal" ? state.revealIndex : state.phase === "result" ? 5 : 0;
 
@@ -40,12 +48,10 @@ export function GameScreen() {
           legalHands={g.legalHands}
           dragging={drag.dragging}
           reveal={revealCount}
+          canDraw={g.canDraw}
+          onDraw={drawCard}
+          timerSeconds={timerActive ? secondsLeft : undefined}
         >
-          {g.canDraw && (
-            <button className={styles.draw} onClick={drawCard}>
-              {placing ? "Draw" : "Draw to swap"}
-            </button>
-          )}
           {g.isHumanTurn && pending && (
             <>
               <DrawnCard card={pending} />
