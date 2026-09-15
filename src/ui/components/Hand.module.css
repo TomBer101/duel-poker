@@ -52,3 +52,17 @@
   background: color-mix(in srgb, var(--accent) 24%, transparent);
   transform: translateY(-3px);
 }
+
+/* Reveal phase: this hand's own matchup outcome, once revealed. */
+.win {
+  outline-color: var(--win);
+  background: color-mix(in srgb, var(--win) 14%, transparent);
+}
+.lose {
+  outline-color: var(--lose);
+  background: color-mix(in srgb, var(--lose) 10%, transparent);
+}
+.tie {
+  outline-color: var(--tie);
+  background: color-mix(in srgb, var(--tie) 12%, transparent);
+}

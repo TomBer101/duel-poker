@@ -11,6 +11,9 @@
   --line: #2a323d;
   --accent: #6ea8fe;
   --accent-strong: #3d7bf7;
+  --win: #4ade80;
+  --lose: #fb7185;
+  --tie: #cbd5e1;
 
   /* Deck suit colours. Currently classic two-colour (♠♣ black, ♥♦ red).
      For a four-colour deck set --suit-diamond and --suit-club to their own

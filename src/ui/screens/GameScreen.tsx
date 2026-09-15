@@ -1,18 +1,14 @@
 import { DndContext, DragOverlay } from "@dnd-kit/core";
 import { TURN_TIMEOUT_MS } from "../../engine/constants";
-import type { PlayerId } from "../../engine/types";
 import { Board } from "../components/Board";
 import { Card } from "../components/Card";
 import { DrawnCard } from "../components/DrawnCard";
+import { ResultOverlay } from "../components/ResultOverlay";
+import { RevealSequence } from "../components/RevealSequence";
 import { useDragPlacement } from "../hooks/useDragPlacement";
 import { useSoloGame } from "../hooks/useSoloGame";
 import { useTimer } from "../hooks/useTimer";
 import styles from "./GameScreen.module.css";
-
-function outcome(winner: PlayerId | "draw", you: PlayerId): string {
-  if (winner === "draw") return "It's a draw";
-  return winner === you ? "You win" : "You lose";
-}
 
 export function GameScreen() {
   const g = useSoloGame();
@@ -26,8 +22,8 @@ export function GameScreen() {
   const drag = useDragPlacement({ legalHands: g.legalHands, onPlace: place });
 
   // The engine only auto-places on timeout during the placing phase (there is
-  // no replace-phase equivalent yet), so the countdown only runs there too —
-  // showing one during replace with no teeth would be misleading.
+  // no replace-phase equivalent yet), and only once a card has actually been
+  // drawn is there anything to place — so the countdown runs only then.
   const timerActive = g.isHumanTurn && placing && pending !== null;
   const secondsLeft = useTimer(timerActive, TURN_TIMEOUT_MS, g.timeout);
 
@@ -65,6 +61,9 @@ export function GameScreen() {
               )}
             </>
           )}
+          {state.phase === "reveal" && state.result && (
+            <RevealSequence result={state.result} revealIndex={state.revealIndex} you={g.you} />
+          )}
         </Board>
 
         {drag.hint && (
@@ -74,15 +73,7 @@ export function GameScreen() {
         )}
 
         {state.phase === "result" && state.result && (
-          <div className={styles.result} role="dialog" aria-label="Game result">
-            <h2>{outcome(state.result.winner, g.you)}</h2>
-            <p>
-              {state.result.wins.p1} – {state.result.wins.p2}
-            </p>
-            <button className={styles.draw} onClick={g.playAgain}>
-              Play again
-            </button>
-          </div>
+          <ResultOverlay result={state.result} you={g.you} onPlayAgain={g.playAgain} />
         )}
 
         <DragOverlay dropAnimation={null}>

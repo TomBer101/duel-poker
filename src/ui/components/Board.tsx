@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { otherPlayer } from "../../engine/deck";
 import type { GameState, Hand as HandT, PlayerId } from "../../engine/types";
 import { Deck } from "./Deck";
-import { Hand } from "./Hand";
+import { Hand, type HandProps } from "./Hand";
 import { Timer } from "./Timer";
 import styles from "./Board.module.css";
 
@@ -17,7 +17,8 @@ export type BoardProps = {
   legalHands?: number[];
   /** A card is being dragged — light legal targets, dim the rest. */
   dragging?: boolean;
-  /** Opponent hands with index < this render face-up (reveal sequence). */
+  /** Hands with index < this are revealed: the opponent's card flips face-up
+   *  and both sides of that matchup pick up a win/lose/tie highlight. */
   reveal?: number;
   /** The local player may draw right now — the deck becomes clickable. */
   canDraw?: boolean;
@@ -40,6 +41,20 @@ function turnText(state: GameState, you: PlayerId): string {
     default:
       return "";
   }
+}
+
+/** This hand's own matchup outcome, once its index has been revealed. */
+function highlightFor(
+  state: GameState,
+  owner: PlayerId,
+  revealed: number,
+  handIndex: number,
+): HandProps["highlight"] {
+  if (handIndex >= revealed) return undefined;
+  const matchup = state.result?.matchups[handIndex];
+  if (!matchup) return undefined;
+  if (matchup.winner === "tie") return "tie";
+  return matchup.winner === owner ? "win" : "lose";
 }
 
 /**
@@ -78,6 +93,7 @@ export function Board({
             owner="opp"
             size="sm"
             reveal={i < reveal}
+            highlight={highlightFor(state, opponent, reveal, i)}
           />
         ))}
       </section>
@@ -96,6 +112,7 @@ export function Board({
             hand={hand}
             legal={legalHands.includes(i)}
             dragging={dragging}
+            highlight={highlightFor(state, you, reveal, i)}
           />
         ))}
       </section>
@@ -108,11 +125,13 @@ function DropHand({
   hand,
   legal,
   dragging,
+  highlight,
 }: {
   index: number;
   hand: HandT;
   legal: boolean;
   dragging: boolean;
+  highlight: HandProps["highlight"];
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `hand-${index}` });
   return (
@@ -123,6 +142,7 @@ function DropHand({
         legal={dragging && legal}
         muted={dragging && !legal}
         dropActive={dragging && legal && isOver}
+        highlight={highlight}
       />
     </div>
   );

@@ -17,6 +17,8 @@ export type HandProps = {
   dropActive?: boolean;
   /** Reveal-phase: show the opponent's face-down card face-up. */
   reveal?: boolean;
+  /** Reveal-phase: this hand's own matchup outcome, once revealed. */
+  highlight?: "win" | "lose" | "tie";
   className?: string;
 };
 
@@ -36,6 +38,7 @@ export function Hand({
   muted,
   dropActive,
   reveal,
+  highlight,
   className,
 }: HandProps) {
   return (
@@ -46,10 +49,14 @@ export function Hand({
         legal && styles.legal,
         muted && styles.muted,
         dropActive && styles.dropActive,
+        highlight === "win" && styles.win,
+        highlight === "lose" && styles.lose,
+        highlight === "tie" && styles.tie,
         className,
       )}
       data-legal={legal || undefined}
       data-drop-active={dropActive || undefined}
+      data-highlight={highlight || undefined}
     >
       {cards.map((pc, i) => {
         if (pc.faceUp) {
