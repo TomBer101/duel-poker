@@ -1,6 +1,43 @@
 {
   "rules": {
-    ".read": "auth != null",
-    ".write": "auth != null"
+    "rooms": {
+      "$roomId": {
+        "seats": {
+          "p1": {
+            ".write": "auth != null && !data.exists()",
+            ".validate": "newData.hasChildren(['nick', 'uid']) && newData.child('uid').val() == auth.uid"
+          },
+          "p2": {
+            ".write": "auth != null && !data.exists() && root.child('rooms').child($roomId).child('seats/p1').exists()",
+            ".validate": "newData.hasChildren(['nick', 'uid']) && newData.child('uid').val() == auth.uid"
+          }
+        },
+
+        "meta": {
+          ".write": "auth != null && ((!data.exists() && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid) || (data.exists() && (root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid || root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid)))",
+          "passwordHash": { ".validate": "newData.isString()" },
+          "createdAt": { ".validate": "newData.val() == now || newData.val() == data.val()" },
+          "turn": { ".validate": "newData.val() == 'p1' || newData.val() == 'p2'" }
+        },
+
+        "presence": {
+          "p1": {
+            ".write": "auth != null && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid"
+          },
+          "p2": {
+            ".write": "auth != null && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid"
+          }
+        },
+
+        "events": {
+          "$pushId": {
+            ".write": "auth != null && !data.exists() && (((newData.child('type').val() == 'DEAL' || newData.child('type').val() == 'ADVANCE_REVEAL' || newData.child('type').val() == 'REMATCH') && (root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid || root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid)) || (newData.child('type').val() == 'TIMEOUT' && ((newData.child('by').val() == 'p1' && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) || (newData.child('by').val() == 'p2' && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid))) || ((newData.child('type').val() == 'DRAW' || newData.child('type').val() == 'END_TURN' || newData.child('type').val() == 'REPLACE_DRAW' || newData.child('type').val() == 'REPLACE') && newData.child('by').val() == root.child('rooms').child($roomId).child('meta/turn').val() && ((newData.child('by').val() == 'p1' && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid) || (newData.child('by').val() == 'p2' && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid))))"
+          },
+          ".read": "auth != null"
+        },
+
+        ".read": "auth != null"
+      }
+    }
   }
 }
