@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 // Kept separate from vite.config.ts on purpose. Historically the Tailwind/React
@@ -22,6 +22,10 @@ export default defineConfig({
     globals: true,
     environment: "jsdom",
     include: ["src/**/*.test.{ts,tsx}"],
+    // Emulator-backed net/ tests need a running Firebase emulator (see
+    // vitest.emulator.config.ts / `pnpm test:emulator`) and are excluded here
+    // so plain `pnpm test` never fails for lack of one.
+    exclude: [...configDefaults.exclude, "src/**/*.emulator.test.ts"],
     setupFiles: ["src/test/setup.ts"],
   },
 });
