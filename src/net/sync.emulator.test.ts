@@ -33,7 +33,7 @@ beforeEach(async () => {
 });
 
 describe("publishEvent / subscribeToEvents", () => {
-  test("appends events at increasing indices, readable in order", async () => {
+  test("appends events under push keys, readable back in append order", async () => {
     const dealEvent: GameEvent = {
       type: "DEAL",
       cards: {
@@ -47,9 +47,15 @@ describe("publishEvent / subscribeToEvents", () => {
     await publishEvent(db, roomId, advanceEvent);
 
     const snapshot = await get(ref(db, `rooms/${roomId}/events`));
-    const events = snapshot.val();
-    expect(events[0]).toEqual(dealEvent);
-    expect(events[1]).toEqual(advanceEvent);
+    const events = Object.values(snapshot.val() as Record<string, GameEvent>);
+    expect(events).toEqual([dealEvent, advanceEvent]);
+  });
+
+  test("optionally updates meta/turn atomically with the event", async () => {
+    await publishEvent(db, roomId, { type: "ADVANCE_REVEAL" }, "p2");
+
+    const snapshot = await get(ref(db, `rooms/${roomId}/meta/turn`));
+    expect(snapshot.val()).toBe("p2");
   });
 
   test("subscribeToEvents delivers each event once, in append order", async () => {

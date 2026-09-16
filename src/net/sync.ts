@@ -2,24 +2,36 @@ import {
   onChildAdded,
   onDisconnect,
   onValue,
+  push,
   ref,
-  runTransaction,
   set,
+  update,
   type Database,
 } from "firebase/database";
 import type { GameEvent, PlayerId } from "../engine/types";
 
-/** Appends an event at the next index under /rooms/{roomId}/events, atomically. */
+/**
+ * Appends an event under /rooms/{roomId}/events using a Firebase push key
+ * (chronologically ordered, collision-free — no two clients can ever
+ * generate the same one, so no "next index" arithmetic is needed) and —
+ * when the event changes whose turn it is — atomically updates
+ * /rooms/{roomId}/meta/turn in the same multi-path write.
+ */
 export async function publishEvent(
   db: Database,
   roomId: string,
   event: GameEvent,
+  nextTurn?: PlayerId,
 ): Promise<void> {
-  await runTransaction(ref(db, `rooms/${roomId}/events`), (events: GameEvent[] | null) => {
-    const next = events ? [...events] : [];
-    next.push(event);
-    return next;
-  });
+  const eventRef = push(ref(db, `rooms/${roomId}/events`));
+
+  const updates: Record<string, unknown> = {
+    [`rooms/${roomId}/events/${eventRef.key}`]: event,
+  };
+  if (nextTurn) {
+    updates[`rooms/${roomId}/meta/turn`] = nextTurn;
+  }
+  await update(ref(db), updates);
 }
 
 /** Fires `callback` once per event, in append order, including ones already present. */
