@@ -1,4 +1,4 @@
-import { get, ref, serverTimestamp, update, type Database } from "firebase/database";
+import { get, ref, serverTimestamp, set, update, type Database } from "firebase/database";
 
 const ROOM_ID_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const ROOM_ID_LENGTH = 6;
@@ -27,6 +27,15 @@ export async function hashPassword(password: string, roomId: string): Promise<st
  * confirm a write actually comes from the player occupying it. `turn` starts
  * at "p1" (the dealer/creator), matching the reducer's initial state.
  * Returns the room id.
+ *
+ * Written as two sequential requests, not one multi-path update: the
+ * security rules for `meta` and `presence/p1` read `seats/p1/uid` via
+ * `root.child(...)` to confirm the writer is the seated player. In a single
+ * multi-location update, the real Realtime Database backend evaluates each
+ * touched path's rules against the *pre-write* state of its siblings (the
+ * local emulator is more lenient here and allows it in one shot — confirmed
+ * by hand against the production database), so `seats/p1` must actually be
+ * committed before anything that reads it back can be written.
  */
 export async function createRoom(
   db: Database,
@@ -37,9 +46,9 @@ export async function createRoom(
   const roomId = generateRoomId();
   const passwordHash = await hashPassword(password, roomId);
 
+  await set(ref(db, `rooms/${roomId}/seats/p1`), { nick, uid });
   await update(ref(db, `rooms/${roomId}`), {
     meta: { passwordHash, createdAt: serverTimestamp(), turn: "p1" },
-    "seats/p1": { nick, uid },
     "presence/p1": true,
   });
 
@@ -69,8 +78,8 @@ export async function joinRoom(
     throw new Error("incorrect password");
   }
 
-  await update(ref(db, `rooms/${roomId}`), {
-    "seats/p2": { nick, uid },
-    "presence/p2": true,
-  });
+  // Sequenced for the same reason as createRoom: presence/p2's rule reads
+  // seats/p2/uid back via root, which must already be committed.
+  await set(ref(db, `rooms/${roomId}/seats/p2`), { nick, uid });
+  await set(ref(db, `rooms/${roomId}/presence/p2`), true);
 }
