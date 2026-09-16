@@ -58,6 +58,11 @@
   border: 1px solid var(--line);
   border-radius: 12px;
   background: transparent;
-  color: #8b93a1;
-  cursor: not-allowed;
+  color: #e8e8ea;
+  text-decoration: none;
+  cursor: pointer;
+}
+.secondary:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }

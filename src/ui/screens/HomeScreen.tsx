@@ -12,12 +12,12 @@ export function HomeScreen() {
           <Link to="/solo" className={styles.primary}>
             Play Solo
           </Link>
-          <button type="button" className={styles.secondary} disabled title="Coming soon">
+          <Link to="/lobby" className={styles.secondary}>
             Create Room
-          </button>
-          <button type="button" className={styles.secondary} disabled title="Coming soon">
+          </Link>
+          <Link to="/lobby" className={styles.secondary}>
             Join Room
-          </button>
+          </Link>
         </div>
       </div>
     </div>

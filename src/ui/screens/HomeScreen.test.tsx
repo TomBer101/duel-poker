@@ -16,13 +16,19 @@ describe("HomeScreen", () => {
     );
   });
 
-  it("leaves Create/Join Room disabled — no multiplayer yet", () => {
+  it("links Create Room and Join Room to /lobby", () => {
     render(
       <MemoryRouter>
         <HomeScreen />
       </MemoryRouter>,
     );
-    expect(screen.getByRole("button", { name: "Create Room" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Join Room" })).toBeDisabled();
+    expect(screen.getByRole("link", { name: "Create Room" })).toHaveAttribute(
+      "href",
+      "/lobby",
+    );
+    expect(screen.getByRole("link", { name: "Join Room" })).toHaveAttribute(
+      "href",
+      "/lobby",
+    );
   });
 });
