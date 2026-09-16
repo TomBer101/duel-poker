@@ -21,9 +21,16 @@ export async function hashPassword(password: string, roomId: string): Promise<st
     .join("");
 }
 
-/** Creates a room, seats the creator as p1, and marks them present. Returns the room id. */
+/**
+ * Creates a room, seats the creator as p1, and marks them present. `uid` is
+ * the creator's Firebase Auth uid, stored on the seat so security rules can
+ * confirm a write actually comes from the player occupying it. `turn` starts
+ * at "p1" (the dealer/creator), matching the reducer's initial state.
+ * Returns the room id.
+ */
 export async function createRoom(
   db: Database,
+  uid: string,
   nick: string,
   password: string,
 ): Promise<string> {
@@ -31,8 +38,8 @@ export async function createRoom(
   const passwordHash = await hashPassword(password, roomId);
 
   await update(ref(db, `rooms/${roomId}`), {
-    meta: { passwordHash, createdAt: serverTimestamp() },
-    "seats/p1": { nick },
+    meta: { passwordHash, createdAt: serverTimestamp(), turn: "p1" },
+    "seats/p1": { nick, uid },
     "presence/p1": true,
   });
 
@@ -42,6 +49,7 @@ export async function createRoom(
 /** Seats the joiner as p2 after verifying the password and that the seat is open. */
 export async function joinRoom(
   db: Database,
+  uid: string,
   roomId: string,
   nick: string,
   password: string,
@@ -62,7 +70,7 @@ export async function joinRoom(
   }
 
   await update(ref(db, `rooms/${roomId}`), {
-    "seats/p2": { nick },
+    "seats/p2": { nick, uid },
     "presence/p2": true,
   });
 }
