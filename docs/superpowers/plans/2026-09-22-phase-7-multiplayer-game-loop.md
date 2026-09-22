@@ -539,11 +539,16 @@ beforeEach(async () => {
 });
 
 test("publishTurnStarted sets a server timestamp subscribers observe", async () => {
+  // The RTDB client SDK fires onValue twice for a serverTimestamp() write:
+  // once immediately with a locally-estimated value, again when the
+  // server's real value round-trips back. Real consumers (Task 8's
+  // useRemoteTimer) only ever care about the latest value, so the test
+  // asserts on `seen.at(-1)`, not on how many times the callback fired.
   const seen: number[] = [];
   const unsubscribe = subscribeToTurnStarted(db, roomId, (at) => seen.push(at));
   await publishTurnStarted(db, roomId);
-  await vi.waitFor(() => expect(seen).toHaveLength(1));
-  expect(seen[0]).toBeGreaterThan(0);
+  await vi.waitFor(() => expect(seen.length).toBeGreaterThan(0));
+  expect(seen.at(-1)).toBeGreaterThan(0);
   unsubscribe();
 });
 
