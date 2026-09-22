@@ -6,6 +6,11 @@ import {
   setupPresence,
   subscribeToEvents,
   subscribeToPresence,
+  publishCommitments,
+  publishReveal,
+  subscribeToCommitments,
+  subscribeToReveals,
+  type ProtocolReveal,
 } from "./sync";
 import type { GameEvent } from "../engine/types";
 
@@ -88,6 +93,47 @@ describe("setupPresence / subscribeToPresence", () => {
       expect(updates.at(-1)).toEqual({ p1: true });
     });
 
+    unsubscribe();
+  });
+});
+
+describe("publishCommitments / subscribeToCommitments", () => {
+  test("delivers a role's commitments when they're written", async () => {
+    const received: string[][] = [];
+    const unsubscribe = subscribeToCommitments(db, roomId, "dealer", (c) => received.push(c));
+
+    await publishCommitments(db, roomId, "dealer", ["h0", "h1"]);
+
+    await vi.waitFor(() => expect(received).toHaveLength(1));
+    expect(received[0]).toEqual(["h0", "h1"]);
+    unsubscribe();
+  });
+});
+
+describe("publishReveal / subscribeToReveals", () => {
+  test("delivers reveals in publish order", async () => {
+    const received: ProtocolReveal[] = [];
+    const unsubscribe = subscribeToReveals(db, roomId, (r) => received.push(r));
+
+    const position: ProtocolReveal = {
+      kind: "position",
+      by: "p2",
+      drawIndex: 0,
+      position: 17,
+      saltHex: "aa",
+    };
+    const card: ProtocolReveal = {
+      kind: "card",
+      by: "p1",
+      position: 17,
+      cardId: "Spades-7",
+      saltHex: "bb",
+    };
+    await publishReveal(db, roomId, position);
+    await publishReveal(db, roomId, card);
+
+    await vi.waitFor(() => expect(received).toHaveLength(2));
+    expect(received).toEqual([position, card]);
     unsubscribe();
   });
 });

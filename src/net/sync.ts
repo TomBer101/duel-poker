@@ -70,3 +70,64 @@ export function subscribeToPresence(
   });
   return unsubscribe;
 }
+
+export type ProtocolRole = "dealer" | "selector";
+
+/** Publishes one role's 52 commitment hashes for the current game's shuffle. */
+export async function publishCommitments(
+  db: Database,
+  roomId: string,
+  role: ProtocolRole,
+  commitments: string[],
+): Promise<void> {
+  await set(ref(db, `rooms/${roomId}/protocol/commitments/${role}`), commitments);
+}
+
+/** Fires `callback` with a role's commitments whenever they're written. */
+export function subscribeToCommitments(
+  db: Database,
+  roomId: string,
+  role: ProtocolRole,
+  callback: (commitments: string[]) => void,
+): () => void {
+  const commitmentsRef = ref(db, `rooms/${roomId}/protocol/commitments/${role}`);
+  return onValue(commitmentsRef, (snapshot) => {
+    const value = snapshot.val() as string[] | null;
+    if (value) callback(value);
+  });
+}
+
+/**
+ * One commit-reveal wire message. `position`/`card` reveal a draw index's
+ * deck position and the card at it (verified independently — see
+ * `protocolController.ts`). `placementCommit`/`placementReveal` cover the
+ * dealer's face-down 5th card, which the dealer already knows and places
+ * secretly: a hash now, the real card only in the reveal phase.
+ */
+export type ProtocolReveal =
+  | { kind: "position"; by: PlayerId; drawIndex: number; position: number; saltHex: string }
+  | { kind: "card"; by: PlayerId; position: number; cardId: string; saltHex: string }
+  | { kind: "placementCommit"; by: PlayerId; handIndex: number; commitment: string }
+  | { kind: "placementReveal"; by: PlayerId; handIndex: number; cardId: string; saltHex: string };
+
+/** Appends a protocol message under /rooms/{roomId}/protocol/reveals. */
+export async function publishReveal(
+  db: Database,
+  roomId: string,
+  reveal: ProtocolReveal,
+): Promise<void> {
+  const revealRef = push(ref(db, `rooms/${roomId}/protocol/reveals`));
+  await set(revealRef, reveal);
+}
+
+/** Fires `callback` once per protocol message, in append order. */
+export function subscribeToReveals(
+  db: Database,
+  roomId: string,
+  callback: (reveal: ProtocolReveal) => void,
+): () => void {
+  const revealsRef = ref(db, `rooms/${roomId}/protocol/reveals`);
+  return onChildAdded(revealsRef, (snapshot) => {
+    callback(snapshot.val() as ProtocolReveal);
+  });
+}
