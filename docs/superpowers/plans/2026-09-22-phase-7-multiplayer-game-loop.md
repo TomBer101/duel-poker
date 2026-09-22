@@ -720,8 +720,11 @@ git commit -m "feat(net): room state helpers for turn clock, dealer role, rematc
 ### Task 5: `useMultiplayerGame` — shuffling phase and opening deal
 
 **Files:**
+- Create: `vitest.emulator.jsdom.config.ts` (Step 0 — new test infra, see below)
+- Modify: `package.json` (Step 0 — new `test:emulator:ui` script)
+- Modify: `vitest.config.ts` (Step 0 — confirm/extend the exclude pattern)
 - Create: `src/ui/hooks/useMultiplayerGame.ts`
-- Test: `src/ui/hooks/useMultiplayerGame.test.ts`
+- Test: `src/ui/hooks/useMultiplayerGame.emulator.test.ts`
 
 **Interfaces:**
 - Consumes: `useGameEngine` (`ui/hooks/useGameEngine.ts`),
@@ -746,10 +749,67 @@ git commit -m "feat(net): room state helpers for turn clock, dealer role, rematc
   reaching that point (role + commitment exchange + collecting the 10
   opening reveals); per-turn drawing is Task 6.
 
+**Test infrastructure gap, close this first:** this task's test needs BOTH
+jsdom/React (for `renderHook`) AND a running Firebase emulator (for
+`createFirebaseClient`/`connectToEmulators`). Neither existing vitest
+config provides both: `vitest.config.ts` has jsdom+React but excludes
+`*.emulator.test.ts` and never starts an emulator; `vitest.emulator.config.ts`
+starts the emulator (via `pnpm test:emulator`'s `firebase emulators:exec`
+wrapper) but runs with `environment: "node"` and no React plugin, meant for
+`src/net/`'s plain-function tests. Add a third config and script before
+writing this task's test.
+
+- [ ] **Step 0: Add the jsdom+emulator test config**
+
+```ts
+// vitest.emulator.jsdom.config.ts
+import { defineConfig } from "vitest/config";
+import react from "@vitejs/plugin-react";
+
+// Like vitest.emulator.config.ts (real Firebase emulator via
+// `firebase emulators:exec`), but for src/ui/ hook tests that also need
+// jsdom + the React plugin for `renderHook`. Kept separate from that file
+// rather than added to it, so a plain `src/net/` emulator test run never
+// pays for jsdom/React it doesn't need.
+export default defineConfig({
+  plugins: [react()],
+  resolve: {
+    alias: { "@": "/src" },
+  },
+  test: {
+    globals: true,
+    environment: "jsdom",
+    include: ["src/ui/**/*.emulator.test.{ts,tsx}"],
+    setupFiles: ["src/test/setup.ts"],
+  },
+});
+```
+
+```json
+// add to package.json's "scripts" (alongside the existing "test:emulator")
+"test:emulator:ui": "firebase emulators:exec --only auth,database \"vitest run --config vitest.emulator.jsdom.config.ts\""
+```
+
+Also add `"src/ui/**/*.emulator.test.ts"` to `vitest.config.ts`'s existing
+`exclude` array (next to `"src/**/*.emulator.test.ts"`, which already
+covers this by prefix — check whether that existing pattern already
+excludes it; if `src/**/*.emulator.test.ts` matches `src/ui/hooks/foo.emulator.test.ts`
+too, as glob semantics suggest, no change is needed there — verify with
+`pnpm test` after Step 1 creates the new test file, confirming plain
+`pnpm test` does NOT try to run it).
+
+- [ ] **Step 0b: Verify the new script runs (against an empty test file)**
+
+Create an empty placeholder at `src/ui/hooks/useMultiplayerGame.emulator.test.ts`
+containing just `import { test } from "vitest"; test.skip("placeholder", () => {});`,
+run `pnpm test:emulator:ui`, confirm it starts the emulator and reports 1
+skipped test with no config errors, then replace the placeholder with
+Step 1's real content below.
+
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-// src/ui/hooks/useMultiplayerGame.test.ts
+// src/ui/hooks/useMultiplayerGame.emulator.test.ts
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, test, beforeEach, vi } from "vitest";
 import { connectToEmulators, createFirebaseClient, signInAnonymous } from "../../net/firebase";
@@ -804,7 +864,7 @@ describe("useMultiplayerGame — shuffling and opening deal", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm test src/ui/hooks/useMultiplayerGame.test.ts`
+Run: `pnpm test:emulator:ui` (runs every *.emulator.test.ts under src/ui via the jsdom+emulator config added in Task 5 Step 0)
 Expected: FAIL — module does not exist.
 
 - [ ] **Step 3: Implement**
@@ -1043,7 +1103,7 @@ And add the opening-deal assembly effect, driven by `resolvedDraw`:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pnpm test src/ui/hooks/useMultiplayerGame.test.ts`
+Run: `pnpm test:emulator:ui` (runs every *.emulator.test.ts under src/ui via the jsdom+emulator config added in Task 5 Step 0)
 Expected: PASS. If the two `renderHook` instances don't converge within the
 timeout, log `protocol.current.violations` from each to see which reveal
 failed verification before debugging further.
@@ -1051,8 +1111,12 @@ failed verification before debugging further.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/engine/deck.ts src/engine/deck.test.ts src/ui/hooks/useMultiplayerGame.ts src/ui/hooks/useMultiplayerGame.test.ts
-git commit -m "feat(ui): useMultiplayerGame — commit-reveal shuffle and opening deal"
+git add vitest.emulator.jsdom.config.ts vitest.config.ts package.json src/engine/deck.ts src/engine/deck.test.ts src/ui/hooks/useMultiplayerGame.ts src/ui/hooks/useMultiplayerGame.emulator.test.ts
+git commit -m "feat(ui): useMultiplayerGame — commit-reveal shuffle and opening deal
+
+Also adds the jsdom+emulator vitest config/script this and later tasks'
+hook tests need (renderHook requires jsdom+React; the commit-reveal flow
+requires a real Firebase emulator; neither existing config had both)."
 ```
 
 (Add a one-line `cardFromId` round-trip test to `src/engine/deck.test.ts`
@@ -1064,7 +1128,7 @@ alongside the existing `cardId` tests before this commit.)
 
 **Files:**
 - Modify: `src/ui/hooks/useMultiplayerGame.ts`
-- Test: `src/ui/hooks/useMultiplayerGame.test.ts` (extend)
+- Test: `src/ui/hooks/useMultiplayerGame.emulator.test.ts` (extend)
 
 **Interfaces:**
 - Consumes: `getLegalHands`, `isFaceDownPlacement` (`engine/placement.ts`).
@@ -1091,7 +1155,7 @@ alongside the existing `cardId` tests before this commit.)
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-// append to src/ui/hooks/useMultiplayerGame.test.ts
+// append to src/ui/hooks/useMultiplayerGame.emulator.test.ts
 test("a full placing phase converges to matching hands on both clients", async () => {
   await publishDealer(db, roomId, "p1");
 
@@ -1122,7 +1186,7 @@ test("a full placing phase converges to matching hands on both clients", async (
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm test src/ui/hooks/useMultiplayerGame.test.ts`
+Run: `pnpm test:emulator:ui` (runs every *.emulator.test.ts under src/ui via the jsdom+emulator config added in Task 5 Step 0)
 Expected: FAIL — `draw`/`placePending`/etc. aren't returned yet.
 
 - [ ] **Step 3: Implement**
@@ -1286,14 +1350,14 @@ dealer skips its own face-down card reveal:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pnpm test src/ui/hooks/useMultiplayerGame.test.ts`
+Run: `pnpm test:emulator:ui` (runs every *.emulator.test.ts under src/ui via the jsdom+emulator config added in Task 5 Step 0)
 Expected: PASS (both tests). Debug via `protocol.current.violations` and
 `getEvents()` diffs between `p1`/`p2` if the two clients diverge.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/crypto/protocolController.ts src/crypto/protocolController.test.ts src/ui/hooks/useMultiplayerGame.ts src/ui/hooks/useMultiplayerGame.test.ts
+git add src/crypto/protocolController.ts src/crypto/protocolController.test.ts src/ui/hooks/useMultiplayerGame.ts src/ui/hooks/useMultiplayerGame.emulator.test.ts
 git commit -m "feat(ui): useMultiplayerGame — per-turn draw/place loop with dealer face-down skip"
 ```
 
@@ -1303,7 +1367,7 @@ git commit -m "feat(ui): useMultiplayerGame — per-turn draw/place loop with de
 
 **Files:**
 - Modify: `src/ui/hooks/useMultiplayerGame.ts`
-- Test: `src/ui/hooks/useMultiplayerGame.test.ts` (extend)
+- Test: `src/ui/hooks/useMultiplayerGame.emulator.test.ts` (extend)
 
 **Interfaces:**
 - Produces: working `replace(handIndex)`, and a reveal-phase driver that
@@ -1315,7 +1379,7 @@ git commit -m "feat(ui): useMultiplayerGame — per-turn draw/place loop with de
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-// append to src/ui/hooks/useMultiplayerGame.test.ts
+// append to src/ui/hooks/useMultiplayerGame.emulator.test.ts
 test("replace phase and reveal phase converge to a result on both clients", async () => {
   await publishDealer(db, roomId, "p1");
   const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
@@ -1349,7 +1413,7 @@ test("replace phase and reveal phase converge to a result on both clients", asyn
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm test src/ui/hooks/useMultiplayerGame.test.ts`
+Run: `pnpm test:emulator:ui` (runs every *.emulator.test.ts under src/ui via the jsdom+emulator config added in Task 5 Step 0)
 Expected: FAIL — `replace` is still a no-op, reveal phase never advances.
 
 - [ ] **Step 3: Implement**
@@ -1441,13 +1505,13 @@ with matching state on both clients, which the test above verifies.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pnpm test src/ui/hooks/useMultiplayerGame.test.ts`
+Run: `pnpm test:emulator:ui` (runs every *.emulator.test.ts under src/ui via the jsdom+emulator config added in Task 5 Step 0)
 Expected: PASS (3 tests)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/ui/hooks/useMultiplayerGame.ts src/ui/hooks/useMultiplayerGame.test.ts
+git add src/ui/hooks/useMultiplayerGame.ts src/ui/hooks/useMultiplayerGame.emulator.test.ts
 git commit -m "feat(ui): useMultiplayerGame — replace phase and reveal-phase verification"
 ```
 
@@ -2129,7 +2193,7 @@ git commit -m "feat(ui): disconnect overlay with 60s claim-win countdown"
 **Files:**
 - Modify: `src/ui/hooks/useMultiplayerGame.ts` (implement `playAgain()`)
 - Modify: `src/ui/screens/GameScreen.tsx` (pass rematch state to `ResultOverlay`)
-- Test: `src/ui/hooks/useMultiplayerGame.test.ts` (extend)
+- Test: `src/ui/hooks/useMultiplayerGame.emulator.test.ts` (extend)
 
 **Interfaces:**
 - Consumes: `publishRematchVote`, `subscribeToRematch`, `resetForRematch`,
@@ -2144,7 +2208,7 @@ git commit -m "feat(ui): disconnect overlay with 60s claim-win countdown"
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-// append to src/ui/hooks/useMultiplayerGame.test.ts
+// append to src/ui/hooks/useMultiplayerGame.emulator.test.ts
 test("both players voting rematch resets the log and flips the dealer", async () => {
   await publishDealer(db, roomId, "p1");
   const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
@@ -2166,7 +2230,7 @@ test("both players voting rematch resets the log and flips the dealer", async ()
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm test src/ui/hooks/useMultiplayerGame.test.ts`
+Run: `pnpm test:emulator:ui` (runs every *.emulator.test.ts under src/ui via the jsdom+emulator config added in Task 5 Step 0)
 Expected: FAIL — `playAgain` still a no-op.
 
 - [ ] **Step 3: Implement**
@@ -2239,13 +2303,13 @@ component tree renders per-game state, e.g. wrap the board section:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pnpm test src/ui/hooks/useMultiplayerGame.test.ts`
+Run: `pnpm test:emulator:ui` (runs every *.emulator.test.ts under src/ui via the jsdom+emulator config added in Task 5 Step 0)
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/ui/hooks/useMultiplayerGame.ts src/ui/hooks/useMultiplayerGame.test.ts src/ui/screens/GameScreen.tsx
+git add src/ui/hooks/useMultiplayerGame.ts src/ui/hooks/useMultiplayerGame.emulator.test.ts src/ui/screens/GameScreen.tsx
 git commit -m "feat(ui): rematch flow — vote, reset room state, flip dealer"
 ```
 
@@ -2374,7 +2438,7 @@ git commit -m "feat(ui): session score tracked and shown on the result overlay"
 
 **Files:**
 - Modify: `src/ui/hooks/useMultiplayerGame.ts`
-- Test: `src/ui/hooks/useMultiplayerGame.test.ts` (extend)
+- Test: `src/ui/hooks/useMultiplayerGame.emulator.test.ts` (extend)
 
 **Interfaces:**
 - Consumes: `subscribeToEvents` (`net/sync.ts`, Phase 6), `replay`
@@ -2389,7 +2453,7 @@ git commit -m "feat(ui): session score tracked and shown on the result overlay"
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-// append to src/ui/hooks/useMultiplayerGame.test.ts
+// append to src/ui/hooks/useMultiplayerGame.emulator.test.ts
 test("remounting mid-game (simulated refresh) recovers the same state", async () => {
   await publishDealer(db, roomId, "p1");
   const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
@@ -2409,7 +2473,7 @@ test("remounting mid-game (simulated refresh) recovers the same state", async ()
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm test src/ui/hooks/useMultiplayerGame.test.ts`
+Run: `pnpm test:emulator:ui` (runs every *.emulator.test.ts under src/ui via the jsdom+emulator config added in Task 5 Step 0)
 Expected: FAIL — a fresh mount currently starts from scratch and re-shuffles
 with a *new* seed (no seed was loaded, since none was ever an exact miss —
 actually `loadSeed` already returns the prior seed via `seedStorage`, so
@@ -2473,13 +2537,13 @@ protocol log itself.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pnpm test src/ui/hooks/useMultiplayerGame.test.ts`
+Run: `pnpm test:emulator:ui` (runs every *.emulator.test.ts under src/ui via the jsdom+emulator config added in Task 5 Step 0)
 Expected: PASS (all cases in the file)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/ui/hooks/useMultiplayerGame.ts src/ui/hooks/useMultiplayerGame.test.ts
+git add src/ui/hooks/useMultiplayerGame.ts src/ui/hooks/useMultiplayerGame.emulator.test.ts
 git commit -m "feat(ui): refresh recovery — replay the event log on mount"
 ```
 
