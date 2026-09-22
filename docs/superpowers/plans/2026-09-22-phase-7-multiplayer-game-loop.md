@@ -1142,19 +1142,20 @@ import { getLegalHands, isFaceDownPlacement } from "../../engine/placement";
       ? [] // replace-phase legality for multiplayer arrives in a later task
       : getLegalHands(state.hands[you])
     : [];
-  const canDraw = isHumanTurn && state.phase === "placing" && state.pendingCard === null;
+  // Always false: multiplayer draws are not a button press. Unlike solo,
+  // where draw() pulls the next card from a locally-held shuffled deck,
+  // neither multiplayer client holds a deck — the card can only become
+  // known once the verified reveal chain resolves it (see the effect
+  // below), which happens automatically the moment it's this player's
+  // turn. Surfacing `canDraw: true` here would render a "Draw" button
+  // that does nothing when clicked, since draw() has nothing to publish.
+  const canDraw = false;
 
-  // Local-only nudge: the reveal chain already resolves the card via the
-  // subscription effects above. draw()/replaceDraw() exist so the UI has
-  // a button to press, but they don't publish anything themselves — the
-  // selector's eager-reveal effect (keyed off state.drawCount) already
-  // did that the moment drawCount advanced past the previous turn.
-  function draw() {
-    /* no-op: card arrives via the verified reveal chain */
-  }
-  function replaceDraw() {
-    /* no-op: same as draw() */
-  }
+  // Inert: kept only so this hook satisfies the same GameHandle shape as
+  // useSoloGame. Never user-invocable (canDraw is always false above), so
+  // GameScreen never renders a control that would call these.
+  function draw() {}
+  function replaceDraw() {}
 
   async function placePending(handIndex: number) {
     if (state.phase !== "placing" || state.turn !== you || !state.pendingCard) return;
@@ -1186,6 +1187,31 @@ import { getLegalHands, isFaceDownPlacement } from "../../engine/placement";
   function playAgain() {
     /* wired in Task 11 */
   }
+
+  // The load-bearing counterpart to Task 5's opening-deal buffer: every
+  // draw index from 10 onward (per-turn placing draws, then the two
+  // replace-phase draws at 50/51) resolves into a DRAW or REPLACE_DRAW the
+  // instant its reveal verifies — nothing else advances state.drawCount
+  // once the opening deal is done, so without this effect the game stalls
+  // forever after DEAL. No dependency array, same reasoning as the DEAL
+  // effect: it's cheap, and it must re-check after every reveal without
+  // needing protocol.current (a ref) as a tracked dependency. Both clients
+  // resolve and dispatch this identically and independently, exactly like
+  // DEAL — no coordination message needed.
+  useEffect(() => {
+    if (!role) return;
+    if (state.phase !== "placing" && state.phase !== "replace") return;
+    if (state.pendingCard !== null) return; // already have this turn's card
+    const drawIndex = state.drawCount;
+    if (drawIndex < DEAL_SLOTS.length) return; // opening deal, handled separately
+    const card = resolvedDraw(protocol.current, drawIndex);
+    if (!card) return;
+    if (state.phase === "placing") {
+      dispatch({ type: "DRAW", by: state.turn, card });
+    } else {
+      dispatch({ type: "REPLACE_DRAW", by: state.turn, card });
+    }
+  });
 
   return {
     state,
@@ -1564,14 +1590,75 @@ git commit -m "feat(ui): useRemoteTimer — server-anchored turn countdown"
 
 ---
 
-### Task 9: Wire `GameScreen` to pick solo vs. multiplayer, add the timeout intent
+### Task 9: Extract a shared `GameHandle` type, then wire `GameScreen` to pick solo vs. multiplayer
 
 **Files:**
+- Create: `src/ui/hooks/gameHandle.ts`
+- Modify: `src/ui/hooks/useSoloGame.ts` (its `SoloGame` type becomes an
+  alias of `GameHandle` — no behavior change)
 - Modify: `src/ui/screens/GameScreen.tsx`
 - Modify: `src/ui/hooks/useMultiplayerGame.ts` (implement the `timeout()`
-  stub from Task 6)
+  stub from Task 6; return type becomes `GameHandle`)
 - Test: `src/ui/screens/GameScreen.test.tsx` (new — the existing screen had
   none; add one covering the route branch)
+
+**Why this comes first in this task:** solo and multiplayer independently
+converged on the same shape by design (`GameScreen` was always meant to
+treat them interchangeably), but nothing enforced it — a field renamed on
+one side wouldn't fail a type check on the other. Extracting the type now,
+before `GameScreen` starts consuming both, makes that enforced rather than
+coincidental.
+
+- [ ] **Step 0: Extract `GameHandle` and point both hooks at it**
+
+```ts
+// src/ui/hooks/gameHandle.ts
+import type { Card, GameEvent, GameState, PlayerId } from "../../engine/types";
+
+/**
+ * The shape `GameScreen` drives regardless of mode. `useSoloGame` and
+ * `useMultiplayerGame` both return this — solo's AI turns set
+ * `aiThinking`, multiplayer's opponent-verification turns never do
+ * (there's no local AI to wait on; the wait is on the network instead,
+ * which `isHumanTurn` already excludes from being actionable).
+ */
+export type GameHandle = {
+  state: GameState;
+  getEvents: () => readonly GameEvent[];
+  you: PlayerId;
+  legalHands: number[];
+  canDraw: boolean;
+  isHumanTurn: boolean;
+  aiThinking: boolean;
+  draw: () => void;
+  placePending: (handIndex: number) => void;
+  replaceDraw: () => void;
+  replace: (handIndex: number | null) => void;
+  timeout: () => void;
+  playAgain: () => void;
+};
+```
+
+```ts
+// src/ui/hooks/useSoloGame.ts — replace the existing `SoloGame` type
+import type { GameHandle } from "./gameHandle";
+
+export type SoloGame = GameHandle;
+```
+
+Run `pnpm exec tsc -b` after this alone — it should still pass with zero
+other changes, confirming `useSoloGame`'s actual return value already
+satisfied `GameHandle` structurally. If it doesn't, the mismatch it
+reports is exactly the drift this step exists to catch; fix `useSoloGame`
+(not `GameHandle`) to match, since `GameHandle` is the contract
+`GameScreen`, `ResultOverlay`, etc. are written against.
+
+`useMultiplayerGame`'s return statement (built up across Tasks 5-8) should
+also be annotated `: GameHandle` once this file exists — add that
+annotation now as part of this step; it will fail to compile until Steps
+1-4 below finish wiring `timeout()`, which is expected and resolves within
+this same task. (Task 15 later widens this to
+`GameHandle & { protocolViolation: boolean }`.)
 
 **Interfaces:**
 - Consumes: `useParams` (`react-router-dom`, already used by
@@ -2407,10 +2494,13 @@ git commit -m "feat(ui): refresh recovery — replay the event log on mount"
 - Modify: `src/ui/screens/GameScreen.tsx` (render it instead of the board)
 
 **Interfaces:**
-- Consumes: `hasViolation` (`crypto/protocolController.ts`, Task 2).
-- Produces: `useMultiplayerGame`'s return type gains
-  `protocolViolation: boolean`. `<ProtocolErrorScreen />` renders a message
-  and a "Leave" link to `/`.
+- Consumes: `hasViolation` (`crypto/protocolController.ts`, Task 2),
+  `GameHandle` (`ui/hooks/gameHandle.ts`, Task 9).
+- Produces: `useMultiplayerGame`'s return type becomes
+  `GameHandle & { protocolViolation: boolean }` — multiplayer-only, so it's
+  an intersection on top of the shared type rather than a field added to
+  `GameHandle` itself (solo has no protocol to violate).
+  `<ProtocolErrorScreen />` renders a message and a "Leave" link to `/`.
 
 **Known gap, acknowledged not fixed by this task:** `hasViolation` only
 reflects draw-reveal (`position`/`card`) verification failures from Tasks
