@@ -10,6 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:emulator": "firebase emulators:exec --only auth,database \"vitest run --config vitest.emulator.config.ts\"",
+    "test:emulator:ui": "firebase emulators:exec --only auth,database \"vitest run --config vitest.emulator.jsdom.config.ts\"",
     "preview": "vite preview"
   },
   "dependencies": {

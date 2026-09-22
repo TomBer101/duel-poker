@@ -6,6 +6,12 @@ export function cardId(card: Card): string {
   return `${card.suit}-${card.rank}`;
 }
 
+/** Inverse of {@link cardId} — reconstructs a Card from its wire identity. */
+export function cardFromId(id: string): Card {
+  const [suit, rankStr] = id.split("-") as [Card["suit"], string];
+  return { suit, rank: Number(rankStr) as Card["rank"] };
+}
+
 /** A fresh, ordered 52-card deck. */
 export function makeDeck(): Card[] {
   const deck: Card[] = [];
