@@ -70,27 +70,43 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
   const dealt = useRef(false);
   const publishedPosition = useRef<Set<number>>(new Set());
   const publishedCard = useRef<Set<number>>(new Set());
-  // Serializes reveal verification (see the reveal-handling effect below):
-  // `applyPositionReveal`/`applyCardReveal` are async (they hash via
-  // crypto.subtle.digest), and multiple reveals for different draw
-  // indices/positions arrive close together. Awaiting them concurrently and
-  // writing back `protocol.current` from each one's own pre-await snapshot
-  // is a read-modify-write race — whichever verification resolves last
-  // clobbers the other's update. Chaining every reveal onto this promise
-  // forces them through one at a time, each starting from the previous
-  // one's result.
-  const revealQueue = useRef<Promise<void>>(Promise.resolve());
+  // Every protocol mutation (commitments AND reveals) goes through this one
+  // promise chain. `applyPositionReveal`/`applyCardReveal` are async (they hash
+  // via crypto.subtle.digest), so awaiting them concurrently and writing back
+  // from a pre-await snapshot is a read-modify-write race — the last to
+  // resolve would clobber the others. Each queued step instead reads
+  // `protocol.current` only when it runs, so it always builds on the previous
+  // step's result. A rejection is recorded as a violation and never breaks
+  // the chain, so one bad message can't silently skip every later one.
+  const protocolQueue = useRef<Promise<void>>(Promise.resolve());
 
   // `protocol` is a ref so its updates don't go through the reducer, but a
   // plain ref mutation alone never schedules a re-render — so effects that
-  // depend on its contents (the selector's next position reveal, the deal
-  // assembly effect below) would never re-run once new commitments/reveals
-  // land. This tick forces a render after every mutation so those effects
-  // get a chance to re-check `protocol.current`.
+  // depend on its contents (the selector's position reveals, the deal
+  // assembly effect below) would never re-run once new data lands. This tick
+  // forces a render after every mutation (and after the local dealer/selector
+  // state refs are set) so those effects re-check.
   const [protocolTick, setProtocolTick] = useState(0);
-  function setProtocol(next: ProtocolControllerState): void {
-    protocol.current = next;
+  function bumpTick(): void {
     setProtocolTick((t) => t + 1);
+  }
+  function updateProtocol(
+    what: string,
+    step: (current: ProtocolControllerState) => ProtocolControllerState | Promise<ProtocolControllerState>,
+  ): void {
+    protocolQueue.current = protocolQueue.current
+      .then(async () => {
+        protocol.current = await step(protocol.current);
+      })
+      .catch((err: unknown) => {
+        const message = `${what} failed: ${err instanceof Error ? err.message : String(err)}`;
+        console.error(`[useMultiplayerGame] ${message}`);
+        protocol.current = {
+          ...protocol.current,
+          violations: [...protocol.current.violations, message],
+        };
+      })
+      .then(bumpTick);
   }
 
   // Who's dealer this game — read once at mount (set by the room creator /
@@ -102,36 +118,38 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
     if (!role) return;
     let cancelled = false;
     (async () => {
-      let seed = loadSeed(roomId, gameNumber);
+      let seed = loadSeed(roomId, gameNumber, you);
       if (!seed) {
         seed = generateSeed();
-        saveSeed(roomId, gameNumber, seed);
+        saveSeed(roomId, gameNumber, you, seed);
       }
       if (role === "dealer") {
         const s = await generateDealerCommitments(seed);
         if (cancelled) return;
         dealerState.current = s;
+        bumpTick();
         await publishCommitments(db, roomId, "dealer", s.commitments);
       } else {
         const s = await generateSelectorCommitments(seed);
         if (cancelled) return;
         selectorState.current = s;
+        bumpTick();
         await publishCommitments(db, roomId, "selector", s.commitments);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [db, roomId, gameNumber, role]);
+  }, [db, roomId, gameNumber, you, role]);
 
   // Learn the opponent's (and echo of my own) commitments.
   useEffect(() => {
     if (!role) return;
     const offDealer = subscribeToCommitments(db, roomId, "dealer", (commitments) => {
-      setProtocol(setCommitments(protocol.current, "dealer", commitments));
+      updateProtocol("dealer commitments", (cur) => setCommitments(cur, "dealer", commitments));
     });
     const offSelector = subscribeToCommitments(db, roomId, "selector", (commitments) => {
-      setProtocol(setCommitments(protocol.current, "selector", commitments));
+      updateProtocol("selector commitments", (cur) => setCommitments(cur, "selector", commitments));
     });
     return () => {
       offDealer();
@@ -154,12 +172,16 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
       if (publishedPosition.current.has(drawIndex)) continue;
       publishedPosition.current.add(drawIndex);
       const { position, salt } = revealDraw(drawIndex, selectorState.current);
-      void publishReveal(db, roomId, {
+      publishReveal(db, roomId, {
         kind: "position",
         by: you,
         drawIndex,
         position,
         saltHex: saltToHex(salt),
+      }).catch((err: unknown) => {
+        // Clear the guard so the next render retries this index.
+        console.error(`[useMultiplayerGame] position reveal ${drawIndex} failed to publish`, err);
+        publishedPosition.current.delete(drawIndex);
       });
     }
   }, [db, roomId, you, role, protocolTick]);
@@ -170,36 +192,45 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
   useEffect(() => {
     if (!role) return;
     return subscribeToReveals(db, roomId, (reveal: ProtocolReveal) => {
-      revealQueue.current = revealQueue.current.then(() => handleReveal(reveal));
-    });
-
-    async function handleReveal(reveal: ProtocolReveal) {
       if (reveal.kind === "position") {
-        setProtocol(
-          await applyPositionReveal(
-            protocol.current,
+        updateProtocol(`position reveal ${reveal.drawIndex}`, async (cur) => {
+          const next = await applyPositionReveal(
+            cur,
             reveal.drawIndex,
             reveal.position,
             hexToSalt(reveal.saltHex),
+          );
+          answerWithCard(reveal.position);
+          return next;
+        });
+      } else if (reveal.kind === "card") {
+        updateProtocol(`card reveal ${reveal.position}`, (cur) =>
+          applyCardReveal(
+            cur,
+            reveal.position,
+            cardFromId(reveal.cardId),
+            hexToSalt(reveal.saltHex),
           ),
         );
-        if (role === "dealer" && dealerState.current && !publishedCard.current.has(reveal.position)) {
-          publishedCard.current.add(reveal.position);
-          const { card, salt } = revealCard(reveal.position, dealerState.current);
-          await publishReveal(db, roomId, {
-            kind: "card",
-            by: you,
-            position: reveal.position,
-            cardId: cardId(card),
-            saltHex: saltToHex(salt),
-          });
-        }
-      } else if (reveal.kind === "card") {
-        const card = cardFromId(reveal.cardId);
-        setProtocol(
-          await applyCardReveal(protocol.current, reveal.position, card, hexToSalt(reveal.saltHex)),
-        );
       }
+    });
+
+    // Dealer only: answer a position reveal with the card committed there.
+    function answerWithCard(position: number): void {
+      if (role !== "dealer" || !dealerState.current || publishedCard.current.has(position)) return;
+      publishedCard.current.add(position);
+      const { card, salt } = revealCard(position, dealerState.current);
+      publishReveal(db, roomId, {
+        kind: "card",
+        by: you,
+        position,
+        cardId: cardId(card),
+        saltHex: saltToHex(salt),
+      }).catch((err: unknown) => {
+        // Clear the guard so a replayed position reveal can retry.
+        console.error(`[useMultiplayerGame] card reveal ${position} failed to publish`, err);
+        publishedCard.current.delete(position);
+      });
     }
   }, [db, roomId, you, role]);
 

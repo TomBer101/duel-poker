@@ -1,6 +1,7 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, test, beforeEach, vi } from "vitest";
 import { connectToEmulators, createFirebaseClient, signInAnonymous } from "../../net/firebase";
+import { loadSeed } from "../../crypto/seedStorage";
 import { publishDealer } from "../../net/roomState";
 import { useMultiplayerGame } from "./useMultiplayerGame";
 import type { Database } from "firebase/database";
@@ -40,6 +41,7 @@ beforeEach(async () => {
 
 describe("useMultiplayerGame — shuffling and opening deal", () => {
   test("both players end the opening deal with 10 cards dealt, dealer's deck order", async () => {
+    const roomId0 = roomId;
     await publishDealer(db, roomId, "p1");
 
     const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
@@ -56,5 +58,22 @@ describe("useMultiplayerGame — shuffling and opening deal", () => {
     // Both clients replayed the same verified deal.
     expect(p1.result.current.state.hands).toEqual(p2.result.current.state.hands);
     expect(p1.result.current.state.phase).toBe("placing");
+
+    // The deal actually populated every hand: 5 hands per player, one
+    // face-up card in each (10 cards total).
+    for (const player of ["p1", "p2"] as const) {
+      const hands = p1.result.current.state.hands[player];
+      expect(hands).toHaveLength(5);
+      for (const hand of hands) expect(hand.cards).toHaveLength(1);
+    }
+    expect(p1.result.current.state.pendingCard).toBeNull();
+
+    // Each client used its own seed even though both share this jsdom
+    // localStorage (seed keys are namespaced by player).
+    const seed1 = loadSeed(roomId0, 1, "p1");
+    const seed2 = loadSeed(roomId0, 1, "p2");
+    expect(seed1).not.toBeNull();
+    expect(seed2).not.toBeNull();
+    expect(seed1).not.toEqual(seed2);
   });
 });
