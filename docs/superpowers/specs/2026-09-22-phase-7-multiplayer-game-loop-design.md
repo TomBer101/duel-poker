@@ -23,7 +23,7 @@ gets no new event types for the protocol. Instead:
   produces locally.
 - The multiplayer game hook dispatches that event into the existing
   `useGameEngine`/`gameReducer`, unchanged from solo.
-- `GameEvent` (`src/engine/types.ts`) is **not extended**. The reducer and
+- `GameEvent` (`src/engine/types.ts`) is **not extended for the protocol** (superseded in part by the 2026-09-24 amendment below, which adds hidden-card events). The reducer and
   the solo/multiplayer split at `useGameEngine` stay exactly as they are
   today.
 
@@ -124,7 +124,7 @@ Building on the Phase 6 shape (`/rooms/{roomId}/{meta,seats,presence,events}`):
 
 - Fixing the dealer-knowledge asymmetry with a full mental-poker shuffle.
 - Spectator mode, chat, or more than 2 players.
-- Any change to `GameEvent`/`gameReducer`.
+- Any change to `GameEvent`/`gameReducer` beyond the 2026-09-24 amendment.
 
 ## Amendment (2026-09-24): hidden face-down cards need a small engine extension
 

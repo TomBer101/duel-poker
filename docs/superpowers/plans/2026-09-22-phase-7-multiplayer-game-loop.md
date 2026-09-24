@@ -1129,6 +1129,81 @@ alongside the existing `cardId` tests before this commit.)
 
 ---
 
+### Task 5b: Engine — hidden placements and deferred scoring
+
+**Why this task exists:** see the spec's 2026-09-24 amendment. The reducer
+must be able to place a card the local player does not know (the dealer's
+face-down cards, seen from the selector), and must not score until every
+card is known. This is a deliberate, small relaxation of the plan's earlier
+"engine untouched" constraint; solo behaviour must stay byte-for-byte the same.
+
+**Files:**
+- Modify: `src/engine/types.ts` (three new `GameEvent` variants)
+- Modify: `src/engine/reducer.ts`
+- Test: the existing reducer test file (find it with a glob for
+  `src/engine/reducer*.test.ts`) — add cases there
+
+**Interfaces (produces, consumed by Tasks 6-7):**
+- `{ type: "PLACE_HIDDEN"; by: PlayerId; handIndex: number }` — like
+  `DRAW` + `END_TURN` in one step for a card the local client does not
+  know. Requires phase `placing`, `turn === by`, `pendingCard === null`,
+  `handIndex` legal AND a face-down placement (`isFaceDownPlacement`).
+  Places `{ faceUp: false }` (no `card`), `drawCount + 1`, then the same
+  turn advance as `END_TURN`.
+- `{ type: "REPLACE_HIDDEN"; by: PlayerId; handIndex: number | null }` —
+  the replace-phase equivalent: `drawCount + 1`, marks `replaceDone[by]`,
+  and when `handIndex !== null` overwrites that hand's 5th slot with
+  `{ faceUp: false }` (no `card`); same turn/phase advance as `REPLACE`.
+- `{ type: "REVEAL_FACE_DOWN"; cards: Record<PlayerId, Card[]> }` — index
+  `i` is hand `i`'s face-down 5th card. Requires phase `reveal` and
+  `result === null`. Fills every face-down slot that has no `card`, asserts
+  every card in both players' hands is now known, then sets
+  `result = scoreGame(hands)`.
+- Deferred scoring: in `applyReplace`, compute `result` only if every
+  placed card in both players' hands has a `card`; otherwise `result: null`.
+  When all are known (always in solo) behaviour is unchanged.
+- `applyAdvanceReveal` must assert `state.result !== null` (a hidden game
+  cannot advance the animation before `REVEAL_FACE_DOWN` lands).
+
+- [ ] **Step 1: Read first.** Read `reducer.ts`, `placement.ts`,
+  `scoring.ts`, and `useRevealPacer.ts`, `RevealSequence.tsx`,
+  `ResultOverlay.tsx`, `Board.tsx`. Write down (in your report) every place
+  that assumes `state.result` is non-null once `phase === "reveal"`. Gate
+  each such place on `result !== null` — `useRevealPacer` in particular must
+  not dispatch `ADVANCE_REVEAL` while `result` is null.
+- [ ] **Step 2: Write failing tests** (table-driven, in the reducer test
+  file): `PLACE_HIDDEN` places a card-less face-down slot and advances the
+  turn; rejects a non-face-down placement, a pending card, the wrong turn;
+  `REPLACE_HIDDEN` with and without a swap; a full hidden game reaches
+  `reveal` with `result === null`; `REVEAL_FACE_DOWN` fills the slots and
+  the resulting `result` deep-equals what `scoreGame` gives for the same
+  fully-known hands; `REVEAL_FACE_DOWN` rejects a missing card or a wrong
+  phase; `ADVANCE_REVEAL` rejects while `result === null`; a solo-style game
+  (all cards known) still scores in `applyReplace` exactly as before.
+- [ ] **Step 3: Run to verify failure:** `pnpm test src/engine`
+- [ ] **Step 4: Implement** the three cases, following `reducer.ts`'s
+  existing style (`assert(...)`, spread-copy state, no mutation), plus the
+  deferred-scoring and `ADVANCE_REVEAL` guard, plus the UI gating from Step 1.
+- [ ] **Step 5: Run** `pnpm test` (whole suite), `pnpm exec tsc -b`,
+  `pnpm lint`. All must pass; no solo test may change.
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/engine src/ui
+git commit -m "feat(engine): hidden placements and deferred scoring for multiplayer face-down cards"
+```
+
+**Downstream amendments (controller will apply before dispatching):**
+Task 6 — the selector dispatches `PLACE_HIDDEN` on the dealer's face-down
+turn (the dealer still dispatches `DRAW` + `END_TURN`); Task 7 — `ProtocolReveal`'s
+`placementReveal` becomes one batched message
+`{ kind: "placementReveal"; by; cards: { handIndex; cardId; saltHex }[] }`,
+sent once when the replace phase ends, and each client dispatches one
+`REVEAL_FACE_DOWN` when both players' batches have verified; `ADVANCE_REVEAL`
+is no longer published.
+
+---
+
 ### Task 6: `useMultiplayerGame` — per-turn draw, place, replace, face-down skip
 
 **Files:**
@@ -1144,9 +1219,26 @@ alongside the existing `cardId` tests before this commit.)
   so `GameScreen` (Task-8-onward wiring) can treat both hooks the same way.
 - Design decisions locked in here:
   - Draw indices `10..49` are per-turn placing draws (40 cards, one per
-    `DRAW`), `50..51` are the two replace-phase draws. The selector's
-    eager-reveal effect from Task 5 already advances by `state.drawCount`,
-    so it naturally covers these ranges too — no new subscription needed.
+    `DRAW`), `50..51` are the two replace-phase draws.
+  - **Correction to how Task 5 actually shipped:** Task 5's implementer
+    found that gating the opening deal's position reveals on
+    `state.drawCount` deadlocks (drawCount stays 0 until DEAL fires, which
+    itself waits on those reveals) — so Task 5's selector effect instead
+    reveals all of indices `0..9` eagerly, in one pass, and stops there. It
+    does **not** extend to indices `10..51`. This task must add its own,
+    separate effect for that (Step 3 below includes it) — do not assume
+    Task 5's effect already covers per-turn draws.
+  - Task 5 also introduced two helpers this task must keep using, not
+    bypass: `setProtocol(next)` (a thin wrapper that both writes
+    `protocol.current` and bumps a `protocolTick` state counter, since a
+    bare ref mutation never triggers React to re-run effects that read
+    `protocol.current`) and `revealQueue` (a ref holding a promise chain
+    that serializes every incoming reveal's async verification, since two
+    reveals verifying concurrently can race and silently drop one
+    other's update to `protocol.current`). Read the actual current
+    contents of `useMultiplayerGame.ts` before writing this task's code —
+    it has already evolved past the plan's original Task 5 sketch in ways
+    that matter here.
   - **Face-down dealer skip:** when it's the dealer's turn and the pending
     card would land face-down (`isFaceDownPlacement`), the dealer's
     `placePending`/`replace` publishes a `"placementCommit"` message
@@ -1328,8 +1420,38 @@ Also track pending placement salts (needed by the reveal phase in Task 7):
   const pendingPlacementSalts = useRef<Map<number, Uint8Array>>(new Map());
 ```
 
-And extend the reveal handler's `"position"` branch from Task 5 so the
-dealer skips its own face-down card reveal:
+**New effect this task adds** — the selector's per-turn position reveal.
+Task 5's eager-reveal effect only covers `drawIndex 0..9`; this is the
+`10..51` counterpart, gated on `state.drawCount` (safe here — unlike the
+opening deal, each of these indices only becomes "next" once the previous
+`DRAW`/`REPLACE_DRAW` has actually dispatched and bumped `drawCount`, so
+there's no equivalent deadlock):
+
+```ts
+  useEffect(() => {
+    if (role !== "selector" || !selectorState.current) return;
+    const drawIndex = state.drawCount;
+    if (drawIndex < DEAL_SLOTS.length || drawIndex >= 52) return;
+    if (publishedPosition.current.has(drawIndex)) return;
+    publishedPosition.current.add(drawIndex);
+    const { position, salt } = revealDraw(drawIndex, selectorState.current);
+    void publishReveal(db, roomId, {
+      kind: "position",
+      by: you,
+      drawIndex,
+      position,
+      saltHex: saltToHex(salt),
+    });
+  }, [db, roomId, you, role, state.drawCount]);
+```
+
+And extend the reveal handler's `"position"` branch from Task 5 — read the
+actual current `handleReveal` function in `useMultiplayerGame.ts` first,
+since it verifies via `setProtocol(await applyPositionReveal(...))` inside
+a `revealQueue`-serialized handler, not the plan's original raw sketch.
+Add the face-down skip as an extra condition on the existing "answer with
+a card reveal" branch, keeping everything else (the `setProtocol` call
+above it, the `revealQueue` wrapping) exactly as Task 5 left it:
 
 ```ts
         if (
@@ -1338,7 +1460,8 @@ dealer skips its own face-down card reveal:
           !publishedCard.current.has(reveal.position) &&
           !isMyFaceDownTurn(reveal.drawIndex)
         ) {
-          // unchanged card-reveal publish
+          // ...unchanged: publishedCard.current.add(...), revealCard(...),
+          // await publishReveal(...) — only the condition above is new.
         }
 ```
 
