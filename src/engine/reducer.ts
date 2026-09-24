@@ -60,6 +60,12 @@ export function gameReducer(state: GameState, event: GameEvent): GameState {
       return applyReplaceDraw(state, event.by, event.card);
     case "REPLACE":
       return applyReplace(state, event.by, event.handIndex);
+    case "PLACE_HIDDEN":
+      return applyPlaceHidden(state, event.by, event.handIndex);
+    case "REPLACE_HIDDEN":
+      return applyReplaceHidden(state, event.by, event.handIndex);
+    case "REVEAL_FACE_DOWN":
+      return applyRevealFaceDown(state, event.cards);
     case "ADVANCE_REVEAL":
       return applyAdvanceReveal(state);
     case "REMATCH":
@@ -205,9 +211,26 @@ function applyReplaceDraw(state: GameState, by: PlayerId, card: Card): GameState
 
 function applyReplace(state: GameState, by: PlayerId, handIndex: number | null): GameState {
   assert(state.phase === "replace", `cannot REPLACE during phase "${state.phase}"`);
+  assert(state.pendingCard !== null, "must REPLACE_DRAW before REPLACE");
+  return finishReplace(state, by, handIndex, { card: state.pendingCard, faceUp: false }, state.drawCount);
+}
+
+function applyReplaceHidden(state: GameState, by: PlayerId, handIndex: number | null): GameState {
+  assert(state.phase === "replace", `cannot REPLACE_HIDDEN during phase "${state.phase}"`);
+  assert(state.pendingCard === null, "a card is already pending");
+  return finishReplace(state, by, handIndex, { faceUp: false }, state.drawCount + 1);
+}
+
+/** Shared tail of REPLACE / REPLACE_HIDDEN: swap the 5th slot, then advance. */
+function finishReplace(
+  state: GameState,
+  by: PlayerId,
+  handIndex: number | null,
+  replacement: PlacedCard,
+  drawCount: number,
+): GameState {
   assert(state.turn === by, `not ${by}'s turn`);
   assert(!state.replaceDone[by], `${by} has already completed the replace phase`);
-  assert(state.pendingCard !== null, "must REPLACE_DRAW before REPLACE");
 
   const hands = { ...state.hands, [by]: [...state.hands[by]] };
 
@@ -221,26 +244,72 @@ function applyReplace(state: GameState, by: PlayerId, handIndex: number | null):
     const slot = hand.cards[CARDS_PER_HAND - 1];
     assert(!slot.faceUp, "the swappable card must be the face-down 5th card");
     const newCards = [...hand.cards];
-    newCards[CARDS_PER_HAND - 1] = { card: state.pendingCard, faceUp: false };
+    newCards[CARDS_PER_HAND - 1] = replacement;
     hands[by][handIndex] = { cards: newCards };
   }
 
   const replaceDone = { ...state.replaceDone, [by]: true };
-  const next: GameState = { ...state, hands, pendingCard: null, replaceDone };
+  const next: GameState = { ...state, hands, drawCount, pendingCard: null, replaceDone };
 
   if (replaceDone.p1 && replaceDone.p2) {
     return {
       ...next,
       phase: "reveal",
       revealIndex: 0,
-      result: scoreGame(next.hands),
+      result: allCardsKnown(next.hands) ? scoreGame(next.hands) : null,
     };
   }
   return { ...next, turn: otherPlayer(by) };
 }
 
+function allCardsKnown(hands: Record<PlayerId, Hand[]>): boolean {
+  return (["p1", "p2"] as const).every((p) =>
+    hands[p].every((h) => h.cards.every((c) => c.card !== undefined)),
+  );
+}
+
+function applyPlaceHidden(state: GameState, by: PlayerId, handIndex: number): GameState {
+  assert(state.phase === "placing", `cannot PLACE_HIDDEN during phase "${state.phase}"`);
+  assert(state.turn === by, `not ${by}'s turn`);
+  assert(state.pendingCard === null, "a card is already pending");
+  assert(
+    getLegalHands(state.hands[by]).includes(handIndex),
+    `hand ${handIndex} is not a legal placement`,
+  );
+  assert(
+    isFaceDownPlacement(state.hands[by][handIndex]),
+    "PLACE_HIDDEN is only valid for a face-down placement",
+  );
+
+  const hands = { ...state.hands, [by]: [...state.hands[by]] };
+  hands[by][handIndex] = { cards: [...hands[by][handIndex].cards, { faceUp: false }] };
+
+  return advanceAfterPlacement({ ...state, hands, drawCount: state.drawCount + 1 }, by);
+}
+
+function applyRevealFaceDown(state: GameState, cards: Record<PlayerId, Card[]>): GameState {
+  assert(state.phase === "reveal", `cannot REVEAL_FACE_DOWN during phase "${state.phase}"`);
+  assert(state.result === null, "face-down cards are already revealed");
+
+  const fill = (player: PlayerId): Hand[] =>
+    state.hands[player].map((hand, i) => {
+      const slot = hand.cards[CARDS_PER_HAND - 1];
+      if (slot.faceUp || slot.card !== undefined) return hand;
+      const card = cards[player][i];
+      assert(card !== undefined, `REVEAL_FACE_DOWN is missing ${player}'s card for hand ${i}`);
+      const newCards = [...hand.cards];
+      newCards[CARDS_PER_HAND - 1] = { ...slot, card };
+      return { cards: newCards };
+    });
+
+  const hands = { p1: fill("p1"), p2: fill("p2") };
+  assert(allCardsKnown(hands), "every card must be known after REVEAL_FACE_DOWN");
+  return { ...state, hands, result: scoreGame(hands) };
+}
+
 function applyAdvanceReveal(state: GameState): GameState {
   assert(state.phase === "reveal", `cannot ADVANCE_REVEAL during phase "${state.phase}"`);
+  assert(state.result !== null, "cannot ADVANCE_REVEAL before face-down cards are revealed");
   const revealIndex = Math.min(state.revealIndex + 1, HANDS_PER_PLAYER);
   return {
     ...state,

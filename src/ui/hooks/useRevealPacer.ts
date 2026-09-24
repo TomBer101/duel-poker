@@ -16,8 +16,8 @@ export function useRevealPacer(
   stepMs: number = REVEAL_STEP_MS,
 ): void {
   useEffect(() => {
-    if (state.phase !== "reveal" || state.revealIndex >= HANDS_PER_PLAYER) return;
+    if (state.phase !== "reveal" || state.result === null || state.revealIndex >= HANDS_PER_PLAYER) return;
     const id = setTimeout(() => dispatch({ type: "ADVANCE_REVEAL" }), stepMs);
     return () => clearTimeout(id);
-  }, [state.phase, state.revealIndex, stepMs, dispatch]);
+  }, [state.phase, state.result, state.revealIndex, stepMs, dispatch]);
 }

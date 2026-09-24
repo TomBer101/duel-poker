@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import { get, ref, type Database } from "firebase/database";
 import { connectToEmulators, createFirebaseClient, signInAnonymous } from "./firebase";
 import {

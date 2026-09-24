@@ -106,5 +106,11 @@ export type GameEvent =
   | { type: "TIMEOUT"; by: PlayerId; card: Card }
   | { type: "REPLACE_DRAW"; by: PlayerId; card: Card }
   | { type: "REPLACE"; by: PlayerId; handIndex: number | null }
+  /** Place a card the local client does not know (opponent's face-down card). */
+  | { type: "PLACE_HIDDEN"; by: PlayerId; handIndex: number }
+  /** Replace-phase equivalent of PLACE_HIDDEN; the drawn card is unknown. */
+  | { type: "REPLACE_HIDDEN"; by: PlayerId; handIndex: number | null }
+  /** Fill every card-less face-down slot; index i is hand i's 5th card. */
+  | { type: "REVEAL_FACE_DOWN"; cards: Record<PlayerId, Card[]> }
   | { type: "ADVANCE_REVEAL" }
   | { type: "REMATCH"; dealer: PlayerId };
