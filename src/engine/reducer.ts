@@ -287,16 +287,31 @@ function applyPlaceHidden(state: GameState, by: PlayerId, handIndex: number): Ga
   return advanceAfterPlacement({ ...state, hands, drawCount: state.drawCount + 1 }, by);
 }
 
+/**
+ * Idempotent consistency check + fill: card-less face-down slots are filled
+ * from `cards`; already-known ones must match (a mismatch is a desync/cheat).
+ */
 function applyRevealFaceDown(state: GameState, cards: Record<PlayerId, Card[]>): GameState {
   assert(state.phase === "reveal", `cannot REVEAL_FACE_DOWN during phase "${state.phase}"`);
-  assert(state.result === null, "face-down cards are already revealed");
+  for (const player of ["p1", "p2"] as const) {
+    assert(
+      cards[player].length === HANDS_PER_PLAYER,
+      `REVEAL_FACE_DOWN must give ${player} exactly ${HANDS_PER_PLAYER} cards`,
+    );
+  }
 
   const fill = (player: PlayerId): Hand[] =>
     state.hands[player].map((hand, i) => {
       const slot = hand.cards[CARDS_PER_HAND - 1];
-      if (slot.faceUp || slot.card !== undefined) return hand;
+      if (slot.faceUp) return hand;
       const card = cards[player][i];
-      assert(card !== undefined, `REVEAL_FACE_DOWN is missing ${player}'s card for hand ${i}`);
+      if (slot.card !== undefined) {
+        assert(
+          slot.card.suit === card.suit && slot.card.rank === card.rank,
+          `REVEAL_FACE_DOWN disagrees with ${player}'s known card in hand ${i}`,
+        );
+        return hand;
+      }
       const newCards = [...hand.cards];
       newCards[CARDS_PER_HAND - 1] = { ...slot, card };
       return { cards: newCards };
@@ -304,7 +319,7 @@ function applyRevealFaceDown(state: GameState, cards: Record<PlayerId, Card[]>):
 
   const hands = { p1: fill("p1"), p2: fill("p2") };
   assert(allCardsKnown(hands), "every card must be known after REVEAL_FACE_DOWN");
-  return { ...state, hands, result: scoreGame(hands) };
+  return { ...state, hands, result: state.result ?? scoreGame(hands) };
 }
 
 function applyAdvanceReveal(state: GameState): GameState {

@@ -207,44 +207,43 @@ function hiddenPlacingPhase(deck: Card[], hiddenBy: PlayerId | null) {
   return { state: s, events };
 }
 
+/** Placing events where both players' face-down placements are hidden. */
+function hiddenBothEvents(deck: Card[]): GameEvent[] {
+  let s = solo();
+  const events: GameEvent[] = [];
+  while (s.phase === "placing") {
+    const by = s.turn;
+    const handIndex = getLegalHands(s.hands[by])[0];
+    const faceDown = isFaceDownPlacement(s.hands[by][handIndex]);
+    const evs: GameEvent[] = faceDown
+      ? [{ type: "PLACE_HIDDEN", by, handIndex }]
+      : [
+          { type: "DRAW", by, card: deck[s.drawCount] },
+          { type: "END_TURN", by, handIndex, faceDown },
+        ];
+    for (const e of evs) s = gameReducer(s, e);
+    events.push(...evs);
+  }
+  return events;
+}
+
 /** Face-down cards per hand, read from a fully-known state. */
 function faceDownCards(s: GameState, p: PlayerId): Card[] {
   return s.hands[p].map((h) => h.cards[4].card as Card);
 }
 
 describe("PLACE_HIDDEN", () => {
-  // Fill hand 0 of p1 to 4 cards so its next placement is face-down.
-  const toFaceDownTurn = () => {
-    const deck = orderedDeck();
-    let s = solo();
-    for (let i = 0; i < 4; i++) {
-      for (const by of ["p1", "p2"] as const) {
-        const h = getLegalHands(s.hands[by])[0];
-        s = gameReducer(s, { type: "DRAW", by, card: deck[s.drawCount] });
-        s = gameReducer(s, { type: "END_TURN", by, handIndex: h, faceDown: false });
-      }
-    }
-    // hands 0..3 of each player hold 0..? cards; advance p1 until hand 0 has 4.
-    return { s, deck };
-  };
-
   it("places a card-less face-down slot, bumps drawCount, passes the turn", () => {
-    let { s } = toFaceDownTurn();
-    // find a state where p1 has a legal face-down hand
-    while (!getLegalHands(s.hands[s.turn]).some((i) => isFaceDownPlacement(s.hands[s.turn][i]))) {
-      const by = s.turn;
-      const h = getLegalHands(s.hands[by])[0];
-      s = gameReducer(s, { type: "DRAW", by, card: orderedDeck()[s.drawCount] });
-      s = gameReducer(s, { type: "END_TURN", by, handIndex: h, faceDown: false });
-    }
-    const by = s.turn;
-    const h = getLegalHands(s.hands[by]).find((i) => isFaceDownPlacement(s.hands[by][i]))!;
-    const before = s.drawCount;
-    const next = gameReducer(s, { type: "PLACE_HIDDEN", by, handIndex: h });
-    expect(next.hands[by][h].cards[4]).toEqual({ faceUp: false });
-    expect(next.drawCount).toBe(before + 1);
+    const { state: end, events } = hiddenPlacingPhase(orderedDeck(), "p1");
+    const idx = events.findIndex((e) => e.type === "PLACE_HIDDEN");
+    const s = replay(solo(), events.slice(0, idx));
+    const e = events[idx] as Extract<GameEvent, { type: "PLACE_HIDDEN" }>;
+    const next = gameReducer(s, e);
+    expect(next.hands[e.by][e.handIndex].cards[4]).toEqual({ faceUp: false });
+    expect(next.drawCount).toBe(s.drawCount + 1);
     expect(next.pendingCard).toBeNull();
-    expect(next.turn).toBe(by === "p1" ? "p2" : "p1");
+    expect(next.turn).toBe(e.by === "p1" ? "p2" : "p1");
+    expect(end.hands.p1.every((h) => h.cards[4].card === undefined)).toBe(true);
   });
 
   it.each([
@@ -285,7 +284,7 @@ describe("hidden game flow", () => {
     if (handIndex !== null) expect(s.hands.p1[handIndex].cards[4]).toEqual({ faceUp: false });
   });
 
-  it("REPLACE_HIDDEN rejects the wrong turn, a face-up target and a repeat", () => {
+  it("REPLACE_HIDDEN rejects the wrong turn, an out-of-range hand and a repeat", () => {
     const s = toReplace();
     expect(() => gameReducer(s, { type: "REPLACE_HIDDEN", by: "p2", handIndex: null })).toThrow();
     const after = gameReducer(s, { type: "REPLACE_HIDDEN", by: "p1", handIndex: null });
@@ -323,7 +322,7 @@ describe("hidden game flow", () => {
     expect(s.phase).toBe("reveal");
   });
 
-  it("REVEAL_FACE_DOWN rejects a missing card, a wrong phase, and a repeat", () => {
+  it("REVEAL_FACE_DOWN rejects a missing card and a wrong phase; a repeat is a no-op", () => {
     const hidden = toReveal();
     const known = hiddenPlacingPhase(deck, null).state;
     const cardsArg = { p1: faceDownCards(known, "p1"), p2: faceDownCards(known, "p2") };
@@ -332,7 +331,7 @@ describe("hidden game flow", () => {
     ).toThrow();
     expect(() => gameReducer(toReplace(), { type: "REVEAL_FACE_DOWN", cards: cardsArg })).toThrow();
     const done = gameReducer(hidden, { type: "REVEAL_FACE_DOWN", cards: cardsArg });
-    expect(() => gameReducer(done, { type: "REVEAL_FACE_DOWN", cards: cardsArg })).toThrow();
+    expect(gameReducer(done, { type: "REVEAL_FACE_DOWN", cards: cardsArg })).toEqual(done);
   });
 
   it("a fully-known game still scores in applyReplace", () => {
@@ -340,5 +339,59 @@ describe("hidden game flow", () => {
     s = gameReducer(s, { type: "REPLACE_HIDDEN", by: "p1", handIndex: null });
     s = gameReducer(s, { type: "REPLACE_HIDDEN", by: "p2", handIndex: null });
     expect(s.result).toEqual(scoreGame(s.hands));
+  });
+
+  it("REPLACE_HIDDEN rejects a non-full hand and a face-up target", () => {
+    const s = toReplace();
+    const withHand = (i: number, cards: GameState["hands"]["p1"][number]["cards"]): GameState => ({
+      ...s,
+      hands: { ...s.hands, p1: s.hands.p1.map((h, j) => (j === i ? { cards } : h)) },
+    });
+    const ev: GameEvent = { type: "REPLACE_HIDDEN", by: "p1", handIndex: 1 };
+    expect(() => gameReducer(withHand(1, s.hands.p1[1].cards.slice(0, 4)), ev)).toThrow();
+    const faceUp = s.hands.p1[1].cards.map((c, k) => (k === 4 ? { card: AH, faceUp: true as const } : c));
+    expect(() => gameReducer(withHand(1, faceUp), ev)).toThrow();
+  });
+
+  it("both players hidden: reveal has result null, REVEAL_FACE_DOWN scores like the known game", () => {
+    const known = hiddenPlacingPhase(deck, null).state;
+    const s0 = replay(solo(), hiddenBothEvents(deck));
+    expect(s0.phase).toBe("replace");
+    let s = s0;
+    s = gameReducer(s, { type: "REPLACE_HIDDEN", by: "p1", handIndex: null });
+    s = gameReducer(s, { type: "REPLACE_HIDDEN", by: "p2", handIndex: null });
+    expect(s.phase).toBe("reveal");
+    expect(s.result).toBeNull();
+    const cardsArg = { p1: faceDownCards(known, "p1"), p2: faceDownCards(known, "p2") };
+    const done = gameReducer(s, { type: "REVEAL_FACE_DOWN", cards: cardsArg });
+    expect(done.result).toEqual(scoreGame(known.hands));
+  });
+
+  describe("REVEAL_FACE_DOWN on a fully-known game", () => {
+    const known = () => {
+      let s = hiddenPlacingPhase(deck, null).state;
+      s = gameReducer(s, { type: "REPLACE_HIDDEN", by: "p1", handIndex: null });
+      return gameReducer(s, { type: "REPLACE_HIDDEN", by: "p2", handIndex: null });
+    };
+    const args = (s: GameState) => ({ p1: faceDownCards(s, "p1"), p2: faceDownCards(s, "p2") });
+
+    it("is an idempotent no-op", () => {
+      const s = known();
+      const once = gameReducer(s, { type: "REVEAL_FACE_DOWN", cards: args(s) });
+      expect(once).toEqual(s);
+      expect(gameReducer(once, { type: "REVEAL_FACE_DOWN", cards: args(s) })).toEqual(s);
+    });
+
+    it("throws on a disagreeing card or a wrong-length list", () => {
+      const s = known();
+      const a = args(s);
+      const other = a.p1[0].suit === "Hearts" && a.p1[0].rank === 2 ? AH : { suit: "Hearts" as const, rank: 2 as const };
+      expect(() =>
+        gameReducer(s, { type: "REVEAL_FACE_DOWN", cards: { ...a, p1: [other, ...a.p1.slice(1)] } }),
+      ).toThrow();
+      expect(() =>
+        gameReducer(s, { type: "REVEAL_FACE_DOWN", cards: { ...a, p1: a.p1.slice(1) } }),
+      ).toThrow();
+    });
   });
 });
