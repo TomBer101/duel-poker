@@ -1,4 +1,4 @@
-import { verify } from "./commitment";
+import { commit, verify } from "./commitment";
 import { cardId } from "../engine/deck";
 import type { Card } from "../engine/types";
 
@@ -84,4 +84,9 @@ export function resolvedDraw(state: ProtocolControllerState, drawIndex: number):
 
 export function hasViolation(state: ProtocolControllerState): boolean {
   return state.violations.length > 0;
+}
+
+/** Hash for a dealer's secret face-down placement: H(cardId:handIndex || salt). */
+export function commitPlacement(card: Card, handIndex: number, salt: Uint8Array): Promise<string> {
+  return commit(`${cardId(card)}:${handIndex}`, salt);
 }

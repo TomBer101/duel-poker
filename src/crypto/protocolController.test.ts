@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   applyCardReveal,
+  commitPlacement,
   applyPositionReveal,
   createProtocolState,
   hasViolation,
@@ -8,7 +9,8 @@ import {
   setCommitments,
 } from "./protocolController";
 import { generateDealerCommitments, generateSelectorCommitments } from "./protocol";
-import { generateSeed } from "./commitment";
+import { generateSalt, generateSeed, verify } from "./commitment";
+import { cardId } from "../engine/deck";
 
 describe("protocolController", () => {
   test("resolves a draw once both halves verify", async () => {
@@ -63,5 +65,15 @@ describe("protocolController", () => {
       new Uint8Array(16),
     );
     expect(hasViolation(state)).toBe(true);
+  });
+
+  test("commitPlacement binds card, hand index and salt", async () => {
+    const card = { suit: "Hearts" as const, rank: 14 as const };
+    const salt = generateSalt();
+    const commitment = await commitPlacement(card, 2, salt);
+    expect(await verify(`${cardId(card)}:2`, salt, commitment)).toBe(true);
+    expect(await commitPlacement(card, 3, salt)).not.toBe(commitment);
+    expect(await commitPlacement({ suit: "Spades", rank: 14 }, 2, salt)).not.toBe(commitment);
+    expect(await commitPlacement(card, 2, generateSalt())).not.toBe(commitment);
   });
 });
