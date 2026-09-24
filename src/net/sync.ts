@@ -108,7 +108,12 @@ export type ProtocolReveal =
   | { kind: "position"; by: PlayerId; drawIndex: number; position: number; saltHex: string }
   | { kind: "card"; by: PlayerId; position: number; cardId: string; saltHex: string }
   | { kind: "placementCommit"; by: PlayerId; handIndex: number; commitment: string }
-  | { kind: "placementReveal"; by: PlayerId; handIndex: number; cardId: string; saltHex: string };
+  | {
+      kind: "placementReveal";
+      by: PlayerId;
+      /** One batch per player, published once when the reveal phase starts. */
+      cards: { handIndex: number; cardId: string; saltHex: string }[];
+    };
 
 /** Appends a protocol message under /rooms/{roomId}/protocol/reveals. */
 export async function publishReveal(

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import {
   applyCardReveal,
+  applyPlacementCommit,
+  applyPlacementReveal,
   applyPositionReveal,
   commitPlacement,
   createProtocolState,
@@ -75,5 +77,53 @@ describe("protocolController", () => {
     expect(await commitPlacement(card, 3, salt)).not.toBe(commitment);
     expect(await commitPlacement({ suit: "Spades", rank: 14 }, 2, salt)).not.toBe(commitment);
     expect(await commitPlacement(card, 2, generateSalt())).not.toBe(commitment);
+  });
+
+  describe("placement commit / batched reveal", () => {
+    const heart = { suit: "Hearts" as const, rank: 14 as const };
+    const spade = { suit: "Spades" as const, rank: 7 as const };
+
+    test("verifies a batch against the commits and records it", async () => {
+      const s1 = generateSalt();
+      const s2 = generateSalt();
+      let state = applyPlacementCommit(createProtocolState(), 0, await commitPlacement(heart, 0, s1));
+      state = applyPlacementCommit(state, 3, await commitPlacement(spade, 3, s2));
+      state = await applyPlacementReveal(state, "p1", [
+        { handIndex: 0, card: heart, salt: s1 },
+        { handIndex: 3, card: spade, salt: s2 },
+      ]);
+      expect(hasViolation(state)).toBe(false);
+      expect(state.revealBatches.p1).toEqual({ 0: heart, 3: spade });
+    });
+
+    test("the LATEST commit per hand wins", async () => {
+      const oldSalt = generateSalt();
+      const newSalt = generateSalt();
+      let state = applyPlacementCommit(createProtocolState(), 1, await commitPlacement(heart, 1, oldSalt));
+      state = applyPlacementCommit(state, 1, await commitPlacement(spade, 1, newSalt));
+      const stale = await applyPlacementReveal(state, "p1", [{ handIndex: 1, card: heart, salt: oldSalt }]);
+      expect(hasViolation(stale)).toBe(true);
+      expect(stale.revealBatches.p1).toBeUndefined();
+      const fresh = await applyPlacementReveal(state, "p1", [{ handIndex: 1, card: spade, salt: newSalt }]);
+      expect(hasViolation(fresh)).toBe(false);
+    });
+
+    test("wrong card, wrong salt, or a missing commit is a violation", async () => {
+      const salt = generateSalt();
+      const state = applyPlacementCommit(createProtocolState(), 0, await commitPlacement(heart, 0, salt));
+      const wrongCard = await applyPlacementReveal(state, "p1", [{ handIndex: 0, card: spade, salt }]);
+      const wrongSalt = await applyPlacementReveal(state, "p1", [{ handIndex: 0, card: heart, salt: generateSalt() }]);
+      const noCommit = await applyPlacementReveal(state, "p1", [{ handIndex: 2, card: heart, salt }]);
+      for (const s of [wrongCard, wrongSalt, noCommit]) {
+        expect(hasViolation(s)).toBe(true);
+        expect(s.revealBatches.p1).toBeUndefined();
+      }
+    });
+
+    test("an empty batch verifies and is recorded", async () => {
+      const state = await applyPlacementReveal(createProtocolState(), "p2", []);
+      expect(hasViolation(state)).toBe(false);
+      expect(state.revealBatches.p2).toEqual({});
+    });
   });
 });

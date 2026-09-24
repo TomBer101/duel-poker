@@ -136,4 +136,21 @@ describe("publishReveal / subscribeToReveals", () => {
     expect(received).toEqual([position, card]);
     unsubscribe();
   });
+
+  test("round-trips a batched placementReveal", async () => {
+    const received: ProtocolReveal[] = [];
+    const unsubscribe = subscribeToReveals(db, roomId, (r) => received.push(r));
+    const batch: ProtocolReveal = {
+      kind: "placementReveal",
+      by: "p1",
+      cards: [
+        { handIndex: 0, cardId: "Spades-7", saltHex: "aa" },
+        { handIndex: 3, cardId: "Hearts-14", saltHex: "bb" },
+      ],
+    };
+    await publishReveal(db, roomId, batch);
+    await vi.waitFor(() => expect(received).toHaveLength(1));
+    expect(received[0]).toEqual(batch);
+    unsubscribe();
+  });
 });

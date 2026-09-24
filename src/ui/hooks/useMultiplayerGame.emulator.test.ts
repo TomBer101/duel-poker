@@ -4,7 +4,9 @@ import { connectToEmulators, createFirebaseClient, signInAnonymous } from "../..
 import { loadSeed } from "../../crypto/seedStorage";
 import { publishDealer } from "../../net/roomState";
 import { useMultiplayerGame } from "./useMultiplayerGame";
-import type { Database } from "firebase/database";
+import { get, ref, type Database } from "firebase/database";
+import type { PlayerId } from "../../engine/types";
+import type { ProtocolReveal } from "../../net/sync";
 
 // The DEAL event schedules 10 staggered `card-place` sfx via real setTimeouts
 // (see ui/sound/gameSounds.ts). jsdom doesn't implement HTMLMediaElement.play,
@@ -116,15 +118,13 @@ describe("useMultiplayerGame - placing phase", () => {
       { timeout: 8000 },
     );
 
-    // The replace-phase draw (out of scope here) may still be settling on one
-    // client; wait until both agree before comparing snapshots.
-    await waitFor(
-      () => expect(p1.result.current.state.drawCount).toBe(p2.result.current.state.drawCount),
-      { timeout: 5000 },
-    );
+    // The dealer (p1) resolves its own secret replace draw (index 50) locally,
+    // the selector never sees that card, so drawCounts legitimately differ by
+    // one here (dealer 51 with a pending card, selector 50).
+    await waitFor(() => expect(p1.result.current.state.pendingCard).not.toBeNull(), { timeout: 5000 });
     const a = p1.result.current.state; // dealer's view
     const b = p2.result.current.state; // selector's view
-    expect(a.drawCount).toBe(b.drawCount);
+    expect(b.drawCount).toBeGreaterThanOrEqual(50);
     expect(a.drawCount).toBeGreaterThanOrEqual(50);
     expect(a.turn).toBe(b.turn);
 
@@ -148,4 +148,101 @@ describe("useMultiplayerGame - placing phase", () => {
       }
     }
   }, 60000);
+});
+
+describe("useMultiplayerGame - replace and reveal phases", () => {
+  async function playToReplace(dealer: PlayerId) {
+    await publishDealer(db, roomId, dealer);
+    const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
+    const p2 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p2", gameNumber: 1 }));
+    const clients = { p1, p2 };
+    await waitFor(() => expect(p1.result.current.state.phase).toBe("placing"), { timeout: 5000 });
+    for (let turn = 0; turn < 40; turn++) {
+      const active = clients[turn % 2 === 0 ? "p1" : "p2"];
+      await waitFor(
+        () => {
+          expect(active.result.current.state.pendingCard).not.toBeNull();
+          expect(active.result.current.legalHands.length).toBeGreaterThan(0);
+        },
+        { timeout: 8000 },
+      );
+      await act(async () => {
+        await active.result.current.placePending(active.result.current.legalHands[0]);
+      });
+    }
+    await waitFor(
+      () => {
+        expect(p1.result.current.state.phase).toBe("replace");
+        expect(p2.result.current.state.phase).toBe("replace");
+      },
+      { timeout: 8000 },
+    );
+    return clients;
+  }
+
+  async function playReplaceAndCheck(dealer: PlayerId, dealerSwap: number | null, selectorSwap: number | null) {
+    const clients = await playToReplace(dealer);
+    const selector = dealer === "p1" ? "p2" : "p1";
+    const order: PlayerId[] = ["p1", "p2"];
+    for (const who of order) {
+      const c = clients[who];
+      await waitFor(
+        () => {
+          expect(c.result.current.state.turn).toBe(who);
+          expect(c.result.current.state.phase).toBe("replace");
+        },
+        { timeout: 8000 },
+      );
+      // The dealer's own draw resolves from its own deck; the selector's via reveals.
+      await waitFor(() => expect(c.result.current.state.pendingCard).not.toBeNull(), { timeout: 8000 });
+      const swap = who === dealer ? dealerSwap : selectorSwap;
+      await act(async () => {
+        await c.result.current.replace(swap);
+      });
+      if (who === dealer && dealer === "p1") {
+        // Selector's view of the dealer's face-down slots holds no card yet.
+        await waitFor(() => expect(clients[selector].result.current.state.turn).toBe(selector), { timeout: 8000 });
+        for (const hand of clients[selector].result.current.state.hands[dealer]) {
+          expect(hand.cards[4].card).toBeUndefined();
+        }
+      }
+    }
+    await waitFor(
+      () => {
+        expect(clients.p1.result.current.state.result).not.toBeNull();
+        expect(clients.p2.result.current.state.result).not.toBeNull();
+      },
+      { timeout: 10000 },
+    );
+    expect(clients.p1.result.current.state.result).toEqual(clients.p2.result.current.state.result);
+    expect(clients.p1.result.current.hasViolation).toBe(false);
+    expect(clients.p2.result.current.hasViolation).toBe(false);
+    for (const who of order) {
+      for (const player of order) {
+        for (const hand of clients[who].result.current.state.hands[player]) {
+          expect(hand.cards[4].card).toBeDefined();
+        }
+      }
+    }
+    expect(clients.p1.result.current.state.hands).toEqual(clients.p2.result.current.state.hands);
+
+    // Wire check: the dealer never published a card reveal for its 5 face-down
+    // placing draws or its own replace draw (52 draws - 6 = 46 card reveals).
+    const snap = await get(ref(db, `rooms/${roomId}/protocol/reveals`));
+    const all = Object.values(snap.val() as Record<string, ProtocolReveal>);
+    expect(all.filter((r) => r.kind === "card")).toHaveLength(46);
+    // Exactly one batch per player.
+    expect(all.filter((r) => r.kind === "placementReveal" && r.by === dealer)).toHaveLength(1);
+    expect(all.filter((r) => r.kind === "placementReveal" && r.by === selector)).toHaveLength(1);
+    // Initial 5 commits, plus one per hidden swap.
+    expect(all.filter((r) => r.kind === "placementCommit")).toHaveLength(5 + (dealerSwap === null ? 0 : 1));
+  }
+
+  test("dealer (p1) swaps into a hidden slot, selector passes: both reach the same result", async () => {
+    await playReplaceAndCheck("p1", 2, null);
+  }, 90000);
+
+  test("dealer (p2) passes, selector swaps: both reach the same result", async () => {
+    await playReplaceAndCheck("p2", null, 1);
+  }, 90000);
 });

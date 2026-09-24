@@ -15,9 +15,12 @@ import {
 } from "../../crypto/protocol";
 import {
   applyCardReveal,
+  applyPlacementCommit,
+  applyPlacementReveal,
   applyPositionReveal,
   commitPlacement,
   createProtocolState,
+  hasViolation,
   resolvedDraw,
   setCommitments,
   type ProtocolControllerState,
@@ -48,7 +51,11 @@ export type MultiplayerGameOptions = {
  * Same handle shape as {@link SoloGame} so GameScreen can treat both hooks
  * alike; `aiThinking` is always false (there is no AI in multiplayer).
  */
-export type MultiplayerGame = Omit<SoloGame, "aiThinking"> & { aiThinking: false };
+export type MultiplayerGame = Omit<SoloGame, "aiThinking"> & {
+  aiThinking: false;
+  /** True once any commit-reveal verification failed (Task 15 renders the screen). */
+  hasViolation: boolean;
+};
 
 /** Deal draw index -> which player/hand it fills. Alternates for fill-evenly. */
 const DEAL_SLOTS: { player: PlayerId; hand: number }[] = Array.from(
@@ -81,6 +88,17 @@ function isFaceDownDraw(drawIndex: number, player: PlayerId): boolean {
   return Math.floor((drawIndex - DEAL_SLOTS.length) / 2) >= FIRST_FACE_DOWN_TURN;
 }
 
+/** Replace-phase draws: p1's turn draws index 50, p2's draws 51. */
+function replaceDrawIndex(player: PlayerId): number {
+  return PLACING_DRAWS_END + (player === FIRST_TURN_PLAYER ? 0 : 1);
+}
+
+/** Normalises a REPLACE handIndex: Firebase drops `null`, so it may be undefined on the wire. */
+function validReplaceHand(handIndex: number | null | undefined): number | null | "invalid" {
+  if (handIndex === null || handIndex === undefined) return null;
+  return Number.isInteger(handIndex) && handIndex >= 0 && handIndex < HANDS_PER_PLAYER ? handIndex : "invalid";
+}
+
 /**
  * Multiplayer-mode composition: the shared {@link useGameEngine} wired to the
  * commit-reveal shuffle protocol (`crypto/protocol.ts` + `protocolController.ts`)
@@ -108,6 +126,9 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
   const pendingPlacementSalts = useRef<Map<number, Uint8Array>>(new Map());
   const placedForDraw = useRef<number | null>(null);
   const warned = useRef<Set<string>>(new Set());
+  const replacedForDraw = useRef<number | null>(null);
+  const batchPublished = useRef(false);
+  const revealDispatched = useRef(false);
   // Every protocol mutation (commitments AND reveals) goes through this one
   // promise chain. `applyPositionReveal`/`applyCardReveal` are async (they hash
   // via crypto.subtle.digest), so awaiting them concurrently and writing back
@@ -125,8 +146,10 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
   // forces a render after every mutation (and after the local dealer/selector
   // state refs are set) so those effects re-check.
   const [protocolTick, setProtocolTick] = useState(0);
+  const [violated, setViolated] = useState(false);
   function bumpTick(): void {
     setProtocolTick((t) => t + 1);
+    setViolated(hasViolation(protocol.current));
   }
   function updateProtocol(
     what: string,
@@ -274,6 +297,24 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
           answerWithCard(reveal.drawIndex, reveal.position);
           return next;
         });
+      } else if (reveal.kind === "placementCommit") {
+        updateProtocol(`placement commit ${reveal.handIndex}`, (cur) =>
+          applyPlacementCommit(cur, reveal.handIndex, reveal.commitment),
+        );
+      } else if (reveal.kind === "placementReveal") {
+        if (reveal.by === you) return; // my own echo
+        updateProtocol(`placement reveal by ${reveal.by}`, (cur) =>
+          applyPlacementReveal(
+            cur,
+            reveal.by,
+            // Firebase drops empty arrays.
+            (reveal.cards ?? []).map((c) => ({
+              handIndex: c.handIndex,
+              card: cardFromId(c.cardId),
+              salt: hexToSalt(c.saltHex),
+            })),
+          ),
+        );
       } else if (reveal.kind === "card") {
         updateProtocol(`card reveal ${reveal.position}`, (cur) =>
           applyCardReveal(
@@ -291,7 +332,8 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
     // selector until the reveal phase (I read it from my own deck instead).
     function answerWithCard(drawIndex: number, position: number): void {
       if (role !== "dealer" || !dealerState.current || publishedCard.current.has(position)) return;
-      if (isFaceDownDraw(drawIndex, you)) return;
+      // Secret from the selector: my face-down placing draws and my own replace draw.
+      if (isFaceDownDraw(drawIndex, you) || drawIndex === replaceDrawIndex(you)) return;
       publishedCard.current.add(position);
       const { card, salt } = revealCard(position, dealerState.current);
       publishReveal(db, roomId, {
@@ -344,6 +386,36 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
   // TODO(Task 14, refresh recovery): events replayed from history are not
   // deduped by push key; a remount resets every ref so this is latent today.
 
+  function handleOpponentReplace(by: PlayerId, rawHandIndex: number | null | undefined): void {
+    if (state.phase !== "replace" || state.turn !== by) return; // not yet my turn to apply it
+    const handIndex = validReplaceHand(rawHandIndex);
+    const fail = (message: string) => {
+      console.warn(`[useMultiplayerGame] ${message}`);
+      opponentEvents.current.shift();
+      recordViolation(message);
+    };
+    if (handIndex === "invalid") return fail(`opponent REPLACE has invalid handIndex ${String(rawHandIndex)}`);
+    if (handIndex !== null && state.hands[by][handIndex].cards[CARDS_PER_HAND - 1]?.faceUp !== false) {
+      return fail(`opponent REPLACE targets hand ${handIndex} without a face-down 5th card`);
+    }
+    if (role === "selector") {
+      // Opponent is the dealer: its replace draw is secret (REPLACE_HIDDEN).
+      if (state.pendingCard !== null || state.drawCount !== replaceDrawIndex(by)) {
+        return fail(`opponent REPLACE disagrees with local draw state (draw ${state.drawCount})`);
+      }
+      opponentEvents.current.shift();
+      dispatch({ type: "REPLACE_HIDDEN", by, handIndex });
+      return;
+    }
+    // Opponent is the selector: wait for its REPLACE_DRAW to resolve, then apply.
+    if (state.pendingCard === null) return;
+    if (state.drawCount - 1 !== replaceDrawIndex(by)) {
+      return fail(`opponent REPLACE disagrees with local draw index (draw ${state.drawCount - 1})`);
+    }
+    opponentEvents.current.shift();
+    dispatch({ type: "REPLACE", by, handIndex });
+  }
+
   // Apply the head of the opponent queue, at most one event per run; the
   // dispatch re-renders, which re-runs this effect for the next one. No dep
   // array: it must re-check after every render/tick, since the card an END_TURN
@@ -352,10 +424,14 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
     if (!role) return;
     const event = opponentEvents.current[0];
     if (!event) return;
+    if (event.type === "REPLACE") {
+      handleOpponentReplace(event.by, event.handIndex);
+      return;
+    }
     if (event.type !== "END_TURN") {
-      // Deliberate FIFO blocking: non-END_TURN opponent events (REPLACE,
-      // TIMEOUT, ...) are handled by Task 7 and later. Until then they stall
-      // the queue, so say so once instead of hanging silently.
+      // Deliberate FIFO blocking: TIMEOUT and other opponent events are handled
+      // by the timer task and later. Until then they stall the queue, so say so
+      // once instead of hanging silently.
       warnOnce(`blocked:${event.type}`, `opponent event ${event.type} is not handled yet; queue blocked`);
       return;
     }
@@ -394,9 +470,11 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
     const drawIndex = state.drawCount;
     if (drawIndex < DEAL_SLOTS.length || drawIndex >= DECK_SIZE) return;
     let card = resolvedDraw(protocol.current, drawIndex);
-    if (!card && role === "dealer" && state.phase === "placing" && isFaceDownDraw(drawIndex, you)) {
-      // My own face-down turn: no card reveal is ever published for it, so
-      // read the card from my own deck once the position is known.
+    const ownSecretDraw =
+      state.phase === "placing" ? isFaceDownDraw(drawIndex, you) : drawIndex === replaceDrawIndex(you);
+    if (!card && role === "dealer" && ownSecretDraw) {
+      // My own face-down turn / replace draw: no card reveal is ever published
+      // for it, so read the card from my own deck once the position is known.
       const position = protocol.current.positions[drawIndex];
       if (position !== undefined && dealerState.current) card = dealerState.current.deck[position];
     }
@@ -407,6 +485,103 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
         : { type: "REPLACE_DRAW", by: state.turn, card },
     );
   });
+
+  // Reveal phase, step 1: publish ONE batch of the face-down cards the opponent
+  // cannot know (the dealer's five 5th cards; the selector's is empty).
+  useEffect(() => {
+    if (!role || state.phase !== "reveal" || batchPublished.current) return;
+    batchPublished.current = true;
+    const cards: { handIndex: number; cardId: string; saltHex: string }[] = [];
+    if (role === "dealer") {
+      for (let handIndex = 0; handIndex < HANDS_PER_PLAYER; handIndex++) {
+        const card = state.hands[you][handIndex].cards[CARDS_PER_HAND - 1]?.card;
+        const salt = pendingPlacementSalts.current.get(handIndex);
+        if (!card || !salt) {
+          warnOnce(`batch-missing:${handIndex}`, `own face-down card/salt for hand ${handIndex} missing; batch not published`);
+          recordViolation(`own face-down card/salt for hand ${handIndex} missing`);
+          return;
+        }
+        cards.push({ handIndex, cardId: cardId(card), saltHex: saltToHex(salt) });
+      }
+    }
+    publishReveal(db, roomId, { kind: "placementReveal", by: you, cards }).catch((err: unknown) => {
+      console.error("[useMultiplayerGame] failed to publish placement reveal batch", err);
+      batchPublished.current = false; // next render retries
+    });
+  });
+
+  // Reveal phase, step 2: once the opponent's batch verified, fill every
+  // still-unknown face-down slot with ONE REVEAL_FACE_DOWN.
+  useEffect(() => {
+    if (!role || state.phase !== "reveal" || revealDispatched.current) return;
+    if (hasViolation(protocol.current)) return;
+    const theirs = protocol.current.revealBatches[otherPlayer(you)];
+    if (!theirs) return;
+    const build = (player: PlayerId): Card[] | null => {
+      const out: Card[] = [];
+      for (let i = 0; i < HANDS_PER_PLAYER; i++) {
+        const known = state.hands[player][i].cards[CARDS_PER_HAND - 1]?.card;
+        const card = known ?? (player === you ? undefined : theirs[i]);
+        if (!card) return null;
+        out.push(card);
+      }
+      return out;
+    };
+    const p1Cards = build("p1");
+    const p2Cards = build("p2");
+    revealDispatched.current = true;
+    if (!p1Cards || !p2Cards) {
+      recordViolation("opponent reveal batch does not cover every unknown face-down card");
+      return;
+    }
+    try {
+      dispatch({ type: "REVEAL_FACE_DOWN", cards: { p1: p1Cards, p2: p2Cards } });
+    } catch (err) {
+      console.error("[useMultiplayerGame] REVEAL_FACE_DOWN rejected by reducer", err);
+      recordViolation(`REVEAL_FACE_DOWN failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
+
+  /** Replace my 5th card in `handIndex` with my pending replace draw, or pass (null). */
+  function replace(handIndex: number | null): void {
+    const card = state.pendingCard;
+    if (state.phase !== "replace" || state.turn !== you || !card) return;
+    if (validReplaceHand(handIndex) === "invalid") return;
+    if (replacedForDraw.current === state.drawCount) return; // already in flight
+    replacedForDraw.current = state.drawCount;
+    const event: GameEvent = { type: "REPLACE", by: you, handIndex };
+    const lastReplacer = state.replaceDone[otherPlayer(you)];
+    const commitFirst = async () => {
+      // A hidden swap needs a fresh commitment (latest per hand wins). The
+      // selector's cards are never hidden from the dealer, so only the dealer commits.
+      if (role !== "dealer" || handIndex === null) return;
+      const salt = generateSalt();
+      const commitment = await commitPlacement(card, handIndex, salt);
+      await publishReveal(db, roomId, { kind: "placementCommit", by: you, handIndex, commitment });
+      pendingPlacementSalts.current.set(handIndex, salt);
+    };
+    commitFirst().then(
+      () => {
+        try {
+          dispatch(event);
+        } catch (err) {
+          console.error("[useMultiplayerGame] local REPLACE rejected by reducer", err);
+          recordViolation(`local REPLACE failed: ${err instanceof Error ? err.message : String(err)}`);
+          replacedForDraw.current = null;
+          return;
+        }
+        publishEvent(db, roomId, event, otherPlayer(you))
+          .then(() => (lastReplacer ? undefined : publishTurnStarted(db, roomId)))
+          .catch((err: unknown) => {
+            console.error("[useMultiplayerGame] failed to publish REPLACE", err);
+          });
+      },
+      (err: unknown) => {
+        console.error("[useMultiplayerGame] failed to commit replacement", err);
+        replacedForDraw.current = null;
+      },
+    );
+  }
 
   const isHumanTurn = state.turn === you && (state.phase === "placing" || state.phase === "replace");
   // Replace-phase legality arrives with the replace flow (a later task).
@@ -473,8 +648,9 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
     draw: () => {},
     replaceDraw: () => {},
     placePending,
-    // Stubs for later tasks (replace phase, remote turn timer, rematch).
-    replace: () => {},
+    replace,
+    hasViolation: violated,
+    // Stubs for later tasks (remote turn timer, rematch).
     timeout: () => {},
     playAgain: () => {},
   };
