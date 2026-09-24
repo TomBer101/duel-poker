@@ -125,3 +125,31 @@ Building on the Phase 6 shape (`/rooms/{roomId}/{meta,seats,presence,events}`):
 - Fixing the dealer-knowledge asymmetry with a full mental-poker shuffle.
 - Spectator mode, chat, or more than 2 players.
 - Any change to `GameEvent`/`gameReducer`.
+
+## Amendment (2026-09-24): hidden face-down cards need a small engine extension
+
+Found during Task 5 review: `scoreGame` runs inside `applyReplace`, before the
+reveal phase, and the reducer's `DRAW` requires a concrete `Card`. On the
+dealer's own face-down turn the selector must not learn the card, so its
+client has nothing to put in `DRAW`, and its local scoring would disagree.
+The earlier rule "`GameEvent`/`gameReducer` are not modified" is therefore
+relaxed, by a deliberately small, synchronous, non-crypto addition:
+
+- **`PLACE_HIDDEN { by, handIndex }`** — the selector-side counterpart of
+  `DRAW` + `END_TURN` for a hidden card: places `{ faceUp: false }` with no
+  `card`, advances `drawCount` and the turn. The dealer's own client still
+  dispatches normal `DRAW` + `END_TURN` (it knows the card). A hidden
+  replace-phase swap needs the equivalent (`REPLACE_HIDDEN`).
+- **`REVEAL_FACE_DOWN { cards: Record<PlayerId, Card[]> }`** — one batched
+  event (one card per hand index, per player) that fills in every missing
+  face-down `card` and computes `result`. Hashes are verified by the protocol
+  controller *before* dispatch, so the reducer stays pure and synchronous.
+- **Deferred scoring:** `applyReplace` scores only when every card is known
+  (always true in solo, so solo is unchanged); otherwise `result` stays
+  `null` and `REVEAL_FACE_DOWN` computes it.
+- **`ADVANCE_REVEAL` is unchanged** and stays local — pure animation pacing.
+  It is no longer published to Firebase.
+
+Reveal timing: each player publishes all their hidden cards in a single
+`placementReveal` message once the replace phase ends; a client dispatches
+`REVEAL_FACE_DOWN` when both players' reveals have verified.
