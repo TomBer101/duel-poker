@@ -1566,6 +1566,27 @@ git commit -m "feat(ui): useMultiplayerGame — per-turn draw/place loop with de
 >    live in protocol state, not a bare ref).
 > 5. `hasViolation` from a failed placement verification must feed Task
 >    15's violation screen; wire the field, Task 15 renders it.
+> 6. **Replace-phase indices.** Replace draws are `50` (p1's turn, first) and
+>    `51` (p2's). The dealer's own replace draw index is `50` if the dealer
+>    is p1, else `51`. On that index the dealer publishes NO `card` reveal
+>    (Task 6 currently reveals it normally — that is the leak to close);
+>    derive this from the index/roles like Task 6's `isFaceDownDraw`, not
+>    from stale `state`. The dealer's client dispatches `REPLACE_DRAW` for
+>    it via the own-deck fallback, then `REPLACE` with the real card.
+> 7. **Opponent-event intake must now also handle `REPLACE`** (Task 6's
+>    queue blocks on any non-END_TURN event, with a one-time warning):
+>    selector receiving the dealer's REPLACE → `REPLACE_HIDDEN { by,
+>    handIndex }` (cross-check like Task 6 rule 3); dealer receiving the
+>    selector's REPLACE → wait for its `REPLACE_DRAW` to resolve via the
+>    normal reveal chain, then dispatch `REPLACE` unchanged. TIMEOUT stays
+>    unhandled (open item, timer task) and must keep warning once.
+> 8. **Hidden swap needs a new commitment.** When the dealer swaps its
+>    replace-draw card into a hand's 5th slot, it publishes a NEW
+>    `placementCommit` for that `handIndex` (fresh salt, new card;
+>    latest commit per hand wins) and updates `pendingPlacementSalts`. The
+>    controller's per-hand commit map must therefore keep the LATEST commit
+>    per `handIndex`; `applyPlacementReveal` verifies against it. If the
+>    dealer passes (`handIndex === null`) nothing is published.
 
 **Files:**
 - Modify: `src/ui/hooks/useMultiplayerGame.ts`
