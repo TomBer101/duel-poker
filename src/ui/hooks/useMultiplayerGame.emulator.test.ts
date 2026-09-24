@@ -49,10 +49,13 @@ describe("useMultiplayerGame â€” shuffling and opening deal", () => {
 
     await waitFor(
       () => {
-        // >= 10: once DEAL lands, the first placing turn's draw resolves
-        // automatically (drawCount 11, pendingCard set) without any user input.
-        expect(p1.result.current.state.drawCount).toBeGreaterThanOrEqual(10);
-        expect(p2.result.current.state.drawCount).toBeGreaterThanOrEqual(10);
+        // Once DEAL lands, the first placing turn's draw may resolve
+        // automatically (drawCount 11, pendingCard set) without user input.
+        for (const c of [p1, p2]) {
+          const { drawCount, pendingCard } = c.result.current.state;
+          expect([10, 11]).toContain(drawCount);
+          expect(pendingCard === null).toBe(drawCount === 10);
+        }
       },
       { timeout: 5000 },
     );
@@ -79,7 +82,7 @@ describe("useMultiplayerGame â€” shuffling and opening deal", () => {
   });
 });
 
-describe("useMultiplayerGame — placing phase", () => {
+describe("useMultiplayerGame - placing phase", () => {
   test("a full placing phase converges to matching hands on both clients", async () => {
     await publishDealer(db, roomId, "p1"); // p1 is dealer, p2 is selector
 
@@ -122,6 +125,7 @@ describe("useMultiplayerGame — placing phase", () => {
     const a = p1.result.current.state; // dealer's view
     const b = p2.result.current.state; // selector's view
     expect(a.drawCount).toBe(b.drawCount);
+    expect(a.drawCount).toBeGreaterThanOrEqual(50);
     expect(a.turn).toBe(b.turn);
 
     for (const player of ["p1", "p2"] as const) {

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
 import {
   applyCardReveal,
-  commitPlacement,
   applyPositionReveal,
+  commitPlacement,
   createProtocolState,
   hasViolation,
   resolvedDraw,

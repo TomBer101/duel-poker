@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Database } from "firebase/database";
-import { HANDS_PER_PLAYER } from "../../engine/constants";
+import { CARDS_PER_HAND, CARDS_PER_PLAYER, DECK_SIZE, HANDS_PER_PLAYER } from "../../engine/constants";
 import { cardFromId, cardId, otherPlayer } from "../../engine/deck";
 import { getLegalHands, isFaceDownPlacement } from "../../engine/placement";
 import type { Card, GameEvent, PlayerId } from "../../engine/types";
@@ -58,10 +58,9 @@ const DEAL_SLOTS: { player: PlayerId; hand: number }[] = Array.from(
 
 // Draw indices 10..49 are the 40 per-turn placing draws; 50..51 the replace draws.
 const FIRST_TURN_PLAYER: PlayerId = "p1";
-const PLACING_DRAWS_END = 50;
-const DECK_SIZE = 52;
+const PLACING_DRAWS_END = CARDS_PER_PLAYER * 2; // 50
 /** A player's own turn number (0-based) from which every placement is face-down. */
-const FIRST_FACE_DOWN_TURN = 15;
+const FIRST_FACE_DOWN_TURN = (CARDS_PER_HAND - 2) * HANDS_PER_PLAYER; // 15
 
 /** Whose placing turn consumes this draw index (turns strictly alternate). */
 function placingTurnOwner(drawIndex: number): PlayerId {
@@ -108,6 +107,7 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
   const opponentEvents = useRef<GameEvent[]>([]);
   const pendingPlacementSalts = useRef<Map<number, Uint8Array>>(new Map());
   const placedForDraw = useRef<number | null>(null);
+  const warned = useRef<Set<string>>(new Set());
   // Every protocol mutation (commitments AND reveals) goes through this one
   // promise chain. `applyPositionReveal`/`applyCardReveal` are async (they hash
   // via crypto.subtle.digest), so awaiting them concurrently and writing back
@@ -145,6 +145,15 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
         };
       })
       .then(bumpTick);
+  }
+
+  function recordViolation(message: string): void {
+    updateProtocol(message, (cur) => ({ ...cur, violations: [...cur.violations, message] }));
+  }
+  function warnOnce(key: string, message: string): void {
+    if (warned.current.has(key)) return;
+    warned.current.add(key);
+    console.warn(`[useMultiplayerGame] ${message}`);
   }
 
   // Who's dealer this game — read once at mount (set by the room creator /
@@ -332,6 +341,9 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
     [db, roomId, you],
   );
 
+  // TODO(Task 14, refresh recovery): events replayed from history are not
+  // deduped by push key; a remount resets every ref so this is latent today.
+
   // Apply the head of the opponent queue, at most one event per run; the
   // dispatch re-renders, which re-runs this effect for the next one. No dep
   // array: it must re-check after every render/tick, since the card an END_TURN
@@ -340,8 +352,27 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
     if (!role) return;
     const event = opponentEvents.current[0];
     if (!event) return;
-    if (event.type !== "END_TURN") return; // other event types: later tasks
+    if (event.type !== "END_TURN") {
+      // Deliberate FIFO blocking: non-END_TURN opponent events (REPLACE,
+      // TIMEOUT, ...) are handled by Task 7 and later. Until then they stall
+      // the queue, so say so once instead of hanging silently.
+      warnOnce(`blocked:${event.type}`, `opponent event ${event.type} is not handled yet; queue blocked`);
+      return;
+    }
     if (state.phase !== "placing" || state.turn !== event.by) return;
+    // Never trust the remote faceDown flag: cross-check the locally derived
+    // rules (draw index and fill-evenly). Draw index of this turn's card:
+    const turnDrawIndex = state.pendingCard !== null ? state.drawCount - 1 : state.drawCount;
+    const legal = getLegalHands(state.hands[event.by]);
+    const expectedFaceDown =
+      legal.includes(event.handIndex) && isFaceDownPlacement(state.hands[event.by][event.handIndex]);
+    if (event.faceDown !== expectedFaceDown || event.faceDown !== isFaceDownDraw(turnDrawIndex, event.by)) {
+      const message = `opponent END_TURN faceDown=${event.faceDown} disagrees with local rules (hand ${event.handIndex}, draw ${turnDrawIndex})`;
+      console.warn(`[useMultiplayerGame] ${message}`);
+      opponentEvents.current.shift();
+      recordViolation(message);
+      return;
+    }
     if (role === "selector" && event.faceDown) {
       // Opponent is the dealer: I never learn this card before the reveal phase.
       if (state.pendingCard !== null) return;
@@ -391,6 +422,9 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
     placedForDraw.current = state.drawCount;
 
     const faceDown = isFaceDownPlacement(state.hands[you][handIndex]);
+    if (role === "dealer" && faceDown !== isFaceDownDraw(state.drawCount - 1, you)) {
+      warnOnce(`own-facedown:${state.drawCount}`, `own placement faceDown=${faceDown} disagrees with draw-index rule (draw ${state.drawCount - 1})`);
+    }
     const event: GameEvent = { type: "END_TURN", by: you, handIndex, faceDown };
     const commitFirst = async () => {
       if (role !== "dealer" || !faceDown) return;
@@ -401,7 +435,15 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
     };
     commitFirst().then(
       () => {
-        dispatch(event);
+        try {
+          dispatch(event);
+        } catch (err) {
+          // A reducer throw here is a protocol-level failure, not a retryable one.
+          console.error("[useMultiplayerGame] local END_TURN rejected by reducer", err);
+          recordViolation(`local END_TURN failed: ${err instanceof Error ? err.message : String(err)}`);
+          placedForDraw.current = null;
+          return;
+        }
         publishEvent(db, roomId, event, otherPlayer(you))
           .then(() => publishTurnStarted(db, roomId))
           .catch((err: unknown) => {
