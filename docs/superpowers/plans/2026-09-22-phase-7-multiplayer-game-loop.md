@@ -1206,6 +1206,45 @@ is no longer published.
 
 ### Task 6: `useMultiplayerGame` — per-turn draw, place, replace, face-down skip
 
+> **CONTROLLER AMENDMENT (2026-09-24, supersedes conflicting text below).**
+> Task 5b added engine events `PLACE_HIDDEN`, `REPLACE_HIDDEN`,
+> `REVEAL_FACE_DOWN` and deferred scoring. This task must use them. Read
+> the CURRENT `useMultiplayerGame.ts` first (it has `updateProtocol`, a
+> `protocolTick`, per-player seeds); the code sketches below predate it.
+>
+> 1. **Opponent event intake (missing from the original plan).** Mount ONE
+>    `subscribeToEvents` effect for the game's lifetime. `onChildAdded`
+>    also echoes your own writes: ignore events whose `by === you`. Events
+>    without `by` (e.g. REMATCH) are handled by their own tasks. For an
+>    opponent `END_TURN {handIndex, faceDown}`: 
+>    - if I am the SELECTOR, the opponent is the dealer, and `faceDown` is
+>      true: dispatch `PLACE_HIDDEN { by: opponent, handIndex }` (I never
+>      learn that card until the reveal phase);
+>    - otherwise wait until my local `state.pendingCard` for that turn has
+>      been resolved via the reveal chain (the event may arrive BEFORE the
+>      card reveal verifies), then dispatch the `END_TURN` unchanged.
+>    Keep unprocessed opponent events in a ref-backed FIFO queue that is
+>    re-checked after every render/tick, so a fast END_TURN never gets
+>    dropped or applied out of order.
+> 2. **Dealer's own face-down turn.** The dealer never publishes a `card`
+>    reveal for it (already in the plan below), so `resolvedDraw` never
+>    resolves that index. The dealer's client must dispatch `DRAW` itself
+>    using `dealerState.current.deck[protocol.current.positions[drawIndex]]`
+>    once the selector's position reveal for that index has verified. Do
+>    this as a fallback inside the per-turn DRAW effect (`role === "dealer"`
+>    and `resolvedDraw` is null but the position is known). Its own
+>    `END_TURN` is then dispatched by `placePending` as planned.
+> 3. **The selector's own face-down turn is normal**: both cards reveal,
+>    the dealer learns it (the accepted asymmetry); the dealer's client
+>    applies the selector's `END_TURN` via rule 1's second branch.
+> 4. The test must end with hands that are equal on both clients EXCEPT
+>    the dealer's face-down `card` fields on the selector's client: assert
+>    equality of `drawCount`, `turn`, `phase`, face-up cards and
+>    `faceUp` flags, and that the selector's view of the dealer's 5th-card
+>    slots has no `card` while the dealer's own view does.
+> 5. TIMEOUT on hidden turns is NOT in this task (open item, owned by the
+>    timer task); leave `timeout()` a documented no-op as planned.
+
 **Files:**
 - Modify: `src/ui/hooks/useMultiplayerGame.ts`
 - Test: `src/ui/hooks/useMultiplayerGame.emulator.test.ts` (extend)
@@ -1492,6 +1531,41 @@ git commit -m "feat(ui): useMultiplayerGame — per-turn draw/place loop with de
 ---
 
 ### Task 7: `useMultiplayerGame` — replace phase and reveal phase
+
+> **CONTROLLER AMENDMENT (2026-09-24, supersedes conflicting text below).**
+> Read the CURRENT `useMultiplayerGame.ts` first. Design changes:
+> 1. **Batched reveal.** `ProtocolReveal`'s `placementReveal` in
+>    `net/sync.ts` becomes ONE message per player:
+>    `{ kind: "placementReveal"; by; cards: { handIndex: number; cardId: string; saltHex: string }[] }`
+>    (update the type and add a sync emulator test for the round trip). Each
+>    player publishes it ONCE, when the replace phase ends (state.phase
+>    becomes `reveal`), containing every face-down card whose owner is that
+>    player and which the OPPONENT does not yet know: for the dealer that is
+>    all five of its own 5th cards; for the selector nothing is hidden from
+>    the dealer, so its batch may be empty or omitted. Use the salts stored
+>    in `pendingPlacementSalts` (Task 6) and verify the opponent's batch
+>    against their `placementCommit` hashes with a new pure
+>    `applyPlacementReveal` in `crypto/protocolController.ts`
+>    (recompute `commitPlacement(card, handIndex, salt)`; mismatch is a
+>    violation) — put it through `updateProtocol`.
+> 2. **One dispatch.** When both required batches have verified, dispatch a
+>    single `REVEAL_FACE_DOWN { cards }` (index i = hand i's 5th card, both
+>    players). It is idempotent on a client that already knows everything.
+>    Do NOT publish `ADVANCE_REVEAL`; `useRevealPacer` dispatches it locally
+>    once `state.result` is non-null.
+> 3. **Replace phase with hidden cards.** The dealer never publishes a
+>    `card` reveal for its OWN replace draw (it may swap into a hidden
+>    slot). When I am the selector and the dealer's `REPLACE` event arrives
+>    (rule 1 of Task 6's intake), dispatch `REPLACE_HIDDEN { by, handIndex }`
+>    instead of `REPLACE_DRAW`+`REPLACE`. The selector's own replace is
+>    normal (the dealer learns the card). The dealer's per-turn DRAW
+>    fallback (Task 6 rule 2) applies to `REPLACE_DRAW` too.
+> 4. **Re-render trigger bug in the sketch below:** `revealedByThem` is a
+>    ref mutated by one effect and read by another with no re-render. Use
+>    the existing `protocolTick`/`updateProtocol` pattern (verified batches
+>    live in protocol state, not a bare ref).
+> 5. `hasViolation` from a failed placement verification must feed Task
+>    15's violation screen; wire the field, Task 15 renders it.
 
 **Files:**
 - Modify: `src/ui/hooks/useMultiplayerGame.ts`
