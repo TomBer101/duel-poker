@@ -1,0 +1,15 @@
+.row {
+  display: flex;
+  gap: 6px;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-surface-muted, #3a3a3a);
+}
+
+.filled {
+  background: var(--color-danger, #e5484d);
+}

@@ -1,12 +1,14 @@
 import { DndContext, DragOverlay } from "@dnd-kit/core";
 import { useParams } from "react-router-dom";
 import { useFirebaseClient } from "../../app/firebaseContext";
-import { TURN_TIMEOUT_MS } from "../../engine/constants";
+import { MAX_STRIKES, TURN_TIMEOUT_MS } from "../../engine/constants";
+import { otherPlayer } from "../../engine/deck";
 import { Board } from "../components/Board";
 import { Card } from "../components/Card";
 import { DrawnCard } from "../components/DrawnCard";
 import { ResultOverlay } from "../components/ResultOverlay";
 import { RevealSequence } from "../components/RevealSequence";
+import { StrikeIndicator } from "../components/StrikeIndicator";
 import { useDragPlacement } from "../hooks/useDragPlacement";
 import { useMultiplayerGame } from "../hooks/useMultiplayerGame";
 import { useRemoteTimer } from "../hooks/useRemoteTimer";
@@ -74,6 +76,10 @@ export function GameScreen() {
       onDragCancel={drag.onDragCancel}
     >
       <div className={styles.screen} data-testid="game-screen">
+        <div className={styles.strikes}>
+          <StrikeIndicator strikes={state.strikes[g.you]} max={MAX_STRIKES} />
+          <StrikeIndicator strikes={state.strikes[otherPlayer(g.you)]} max={MAX_STRIKES} />
+        </div>
         <Board
           state={state}
           you={g.you}
