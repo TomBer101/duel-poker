@@ -184,6 +184,7 @@ function applyTimeout(state: GameState, by: PlayerId, card: Card): GameState {
 function applyTimeoutHidden(state: GameState, by: PlayerId): GameState {
   assert(state.phase === "placing", `cannot TIMEOUT_HIDDEN during phase "${state.phase}"`);
   assert(state.turn === by, `TIMEOUT_HIDDEN.by must be the active player (${state.turn})`);
+  assert(state.pendingCard === null, "a card is already pending");
 
   const handIndex = getAutoPlaceIndex(state.hands[by]);
   const hands = { ...state.hands, [by]: [...state.hands[by]] };

@@ -179,6 +179,11 @@ describe("TIMEOUT_HIDDEN", () => {
       gameReducer(state, { type: "TIMEOUT_HIDDEN", by: state.turn }),
     ).toThrow();
   });
+
+  it("rejects when a card is pending", () => {
+    const s = gameReducer(solo(), { type: "DRAW", by: "p1", card: AH });
+    expect(() => gameReducer(s, { type: "TIMEOUT_HIDDEN", by: "p1" })).toThrow();
+  });
 });
 
 describe("full game playthrough", () => {
