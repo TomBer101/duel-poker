@@ -335,3 +335,146 @@ describe("useMultiplayerGame - replace and reveal phases", () => {
     );
   }, 30000);
 });
+
+describe("useMultiplayerGame - timeout", () => {
+  test("a normal-turn timeout: the opponent reports my resolved card, both clients converge", async () => {
+    await publishDealer(db, roomId, "p1"); // p1 dealer, p2 selector
+
+    const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
+    const p2 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p2", gameNumber: 1 }));
+    await waitFor(() => expect(p1.result.current.state.phase).toBe("placing"), { timeout: 5000 });
+
+    // p1's (the dealer's) first turn: a normal, non-face-down placement.
+    await waitFor(
+      () => {
+        expect(p1.result.current.state.pendingCard).not.toBeNull();
+        expect(p1.result.current.legalHands.length).toBeGreaterThan(0);
+      },
+      { timeout: 5000 },
+    );
+
+    // It's p1's own turn: p1 timing out itself is a no-op (only the
+    // non-active player may ever report a timeout).
+    act(() => p1.result.current.timeout());
+    expect(p1.result.current.state.strikes).toEqual({ p1: 0, p2: 0 });
+
+    await act(async () => {
+      await p1.result.current.placePending(p1.result.current.legalHands[0]);
+    });
+
+    // p2's turn now; wait for its card to resolve on both clients (both
+    // learn every non-face-down card the same way as a normal draw).
+    await waitFor(
+      () => {
+        expect(p1.result.current.state.turn).toBe("p2");
+        expect(p1.result.current.state.pendingCard).not.toBeNull();
+        expect(p2.result.current.state.pendingCard).not.toBeNull();
+      },
+      { timeout: 5000 },
+    );
+
+    // p1 (not active) reports p2's timeout with the now-resolved card.
+    act(() => p1.result.current.timeout());
+
+    await waitFor(
+      () => {
+        expect(p1.result.current.state.strikes.p2).toBe(1);
+        expect(p2.result.current.state.strikes.p2).toBe(1);
+      },
+      { timeout: 5000 },
+    );
+
+    expect(p1.result.current.state.turn).toBe(p2.result.current.state.turn);
+    expect(p1.result.current.state.hands).toEqual(p2.result.current.state.hands);
+    expect(p1.result.current.hasViolation).toBe(false);
+    expect(p2.result.current.hasViolation).toBe(false);
+  }, 30000);
+
+  test("a hidden-turn timeout: the dealer's own face-down turn applies TIMEOUT_HIDDEN on both clients", async () => {
+    await publishDealer(db, roomId, "p1"); // p1 dealer, p2 selector
+
+    const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
+    const p2 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p2", gameNumber: 1 }));
+    const clients = { p1, p2 };
+    await waitFor(() => expect(p1.result.current.state.phase).toBe("placing"), { timeout: 5000 });
+
+    // Drive 30 normal placing turns (p1's own turns 0..14) to reach p1's
+    // (the dealer's) first face-down turn (its own turn 15, overall turn 30).
+    for (let turn = 0; turn < 30; turn++) {
+      const active = clients[turn % 2 === 0 ? "p1" : "p2"];
+      await waitFor(
+        () => {
+          expect(active.result.current.state.pendingCard).not.toBeNull();
+          expect(active.result.current.legalHands.length).toBeGreaterThan(0);
+        },
+        { timeout: 8000 },
+      );
+      await act(async () => {
+        await active.result.current.placePending(active.result.current.legalHands[0]);
+      });
+    }
+
+    await waitFor(
+      () => {
+        expect(p1.result.current.state.turn).toBe("p1");
+        expect(p2.result.current.state.turn).toBe("p1");
+        expect(p1.result.current.state.phase).toBe("placing");
+      },
+      { timeout: 8000 },
+    );
+    // The dealer resolves its own secret draw from its own deck; the
+    // selector never does — this is exactly the hidden case.
+    await waitFor(() => expect(p1.result.current.state.pendingCard).not.toBeNull(), { timeout: 8000 });
+    expect(p2.result.current.state.pendingCard).toBeNull();
+
+    // p2 (the selector, not active) reports p1's hidden turn as timed out.
+    act(() => p2.result.current.timeout());
+
+    await waitFor(
+      () => {
+        expect(p1.result.current.state.strikes.p1).toBe(1);
+        expect(p2.result.current.state.strikes.p1).toBe(1);
+      },
+      { timeout: 8000 },
+    );
+
+    expect(p1.result.current.state.turn).toBe("p2");
+    expect(p2.result.current.state.turn).toBe("p2");
+
+    // The auto-placed hand (fill-evenly picks hand 0 here): a real card on
+    // the dealer's own view, card-less on the selector's — same asymmetry
+    // as any other face-down placement before the reveal phase.
+    const dealerView = p1.result.current.state.hands.p1[0].cards;
+    const selectorView = p2.result.current.state.hands.p1[0].cards;
+    expect(dealerView).toHaveLength(5);
+    expect(selectorView).toHaveLength(5);
+    expect(dealerView[4].faceUp).toBe(false);
+    expect(selectorView[4].faceUp).toBe(false);
+    expect(dealerView[4].card).toBeDefined();
+    expect(selectorView[4].card).toBeUndefined();
+
+    expect(p1.result.current.state.drawCount).toBe(p2.result.current.state.drawCount);
+    expect(p1.result.current.hasViolation).toBe(false);
+    expect(p2.result.current.hasViolation).toBe(false);
+  }, 60000);
+
+  test("timeout() is a safe no-op before setup completes and on my own turn", async () => {
+    const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
+    // Role/dealer not resolved yet (no dealer published, p2 not even
+    // mounted): must not throw, must not change anything.
+    expect(() => act(() => p1.result.current.timeout())).not.toThrow();
+    expect(p1.result.current.state.phase).not.toBe("result");
+
+    await publishDealer(db, roomId, "p1");
+    const p2 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p2", gameNumber: 1 }));
+    await waitFor(() => expect(p1.result.current.state.phase).toBe("placing"), { timeout: 5000 });
+    await waitFor(() => expect(p1.result.current.state.pendingCard).not.toBeNull(), { timeout: 5000 });
+
+    // p1 is dealer and it's p1's own turn: it must never self-report.
+    const before = p1.result.current.state;
+    act(() => p1.result.current.timeout());
+    expect(p1.result.current.state).toBe(before);
+    expect(p1.result.current.hasViolation).toBe(false);
+    void p2; // kept mounted only so the deal/draw pipeline actually runs
+  }, 15000);
+});

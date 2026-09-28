@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Database } from "firebase/database";
 import { CARDS_PER_HAND, CARDS_PER_PLAYER, DECK_SIZE, HANDS_PER_PLAYER } from "../../engine/constants";
 import { cardFromId, cardId, otherPlayer } from "../../engine/deck";
-import { getLegalHands, isFaceDownPlacement } from "../../engine/placement";
+import { getAutoPlaceIndex, getLegalHands, isFaceDownPlacement } from "../../engine/placement";
 import type { Card, GameEvent, PlayerId } from "../../engine/types";
 import { generateSalt, generateSeed, hexToSalt, saltToHex } from "../../crypto/commitment";
 import {
@@ -133,6 +133,8 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
   const placedForDraw = useRef<number | null>(null);
   const warned = useRef<Set<string>>(new Set());
   const replacedForDraw = useRef<number | null>(null);
+  const timedOutForDraw = useRef<number | null>(null);
+  const timedOutOwnHiddenForDraw = useRef<number | null>(null);
   const batchPublished = useRef(false);
   const batchFailures = useRef(0);
   const verifyQueued = useRef(false);
@@ -394,7 +396,17 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
   useEffect(
     () =>
       subscribeToEvents(db, roomId, (event) => {
-        if (!("by" in event) || event.by === you) return;
+        if (!("by" in event)) return;
+        // Self-echo detection is inverted for TIMEOUT/TIMEOUT_HIDDEN: per spec
+        // only the NON-active player writes them, so `event.by` names the
+        // TIMED-OUT (active) player, not the sender. On the timed-out player's
+        // own client `event.by === you`, yet that client never wrote it — the
+        // opponent did, reporting on me — so it must NOT be treated as my own
+        // echo. Every other event type still uses `event.by === you` as "I
+        // sent this" (I only ever publish events about my own actions).
+        const isOwnEcho =
+          event.type === "TIMEOUT" || event.type === "TIMEOUT_HIDDEN" ? event.by !== you : event.by === you;
+        if (isOwnEcho) return;
         opponentEvents.current.push(event);
         bumpTick();
       }),
@@ -403,6 +415,23 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
 
   // TODO(Task 14, refresh recovery): events replayed from history are not
   // deduped by push key; a remount resets every ref so this is latent today.
+
+  /**
+   * Dealer-only: hashes and publishes a `placementCommit` for a known
+   * face-down card at `handIndex`, and records its salt and originating
+   * draw index so the reveal-phase batch (further below) can later name and
+   * bind it back to the deck commitment. Same commit `placePending`/`replace`
+   * publish for a self-initiated hidden placement/swap, factored out so the
+   * dealer-side translation of an opponent's TIMEOUT_HIDDEN report (my own
+   * hidden turn, timed out) can commit its card the same way.
+   */
+  async function commitOwnFaceDownCard(handIndex: number, card: Card, drawIndex: number): Promise<void> {
+    const salt = generateSalt();
+    const commitment = await commitPlacement(card, handIndex, salt);
+    await publishReveal(db, roomId, { kind: "placementCommit", by: you, handIndex, commitment });
+    pendingPlacementSalts.current.set(handIndex, salt);
+    ownSlotDraw.current.set(handIndex, drawIndex);
+  }
 
   function handleOpponentReplace(by: PlayerId, rawHandIndex: number | null | undefined): void {
     const fail = (message: string) => {
@@ -454,9 +483,71 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
       handleOpponentReplace(event.by, event.handIndex);
       return;
     }
+    if (event.type === "TIMEOUT" || event.type === "TIMEOUT_HIDDEN") {
+      // Self-contained (TIMEOUT carries its own card; TIMEOUT_HIDDEN carries
+      // none by design), so — unlike END_TURN — there's no local pendingCard
+      // to wait on in the general case. Still wait for my own dispatch to
+      // catch up to the turn this reports, same readiness gate as END_TURN
+      // below. Trusted as-is, like every other opponent event applied in
+      // this queue: TIMEOUT always carries a card the sender legitimately
+      // had, and TIMEOUT_HIDDEN needs no cross-check beyond the turn match
+      // already required to apply it.
+      if (state.phase !== "placing" || state.turn !== event.by) return;
+      if (event.type === "TIMEOUT_HIDDEN" && event.by === you) {
+        // The one case this queue ever reports MY OWN turn: only the
+        // non-active player may write TIMEOUT_HIDDEN, so this is the
+        // opponent telling me MY hidden turn timed out. Unlike the selector
+        // (who never learns this card), I'm the dealer here — the same
+        // isFaceDownDraw-derived asymmetry `timeout()` uses — and I already
+        // know my own secret card via the normal per-turn draw effect once
+        // its position reveal lands, virtually always well before a 60s
+        // timeout. Applying the literal card-less TIMEOUT_HIDDEN here would
+        // both discard a card I already hold AND violate the reducer's own
+        // precondition (it asserts no card is pending). So translate to the
+        // real TIMEOUT locally with my known card — same asymmetric-by-role
+        // translation already used below for an opponent's face-down
+        // END_TURN -> PLACE_HIDDEN — and commit it exactly like `placePending`
+        // would have, so the reveal-phase batch can still name and bind it.
+        if (state.pendingCard === null) {
+          // Rare: my own position reveal hasn't landed either. I don't know
+          // the card any more than the opponent does, so apply it as-is.
+          opponentEvents.current.shift();
+          dispatch(event);
+          return;
+        }
+        if (timedOutOwnHiddenForDraw.current === state.drawCount) return; // already in flight
+        timedOutOwnHiddenForDraw.current = state.drawCount;
+        opponentEvents.current.shift();
+        const card = state.pendingCard;
+        const handIndex = getAutoPlaceIndex(state.hands[you]);
+        const drawIndex = state.drawCount - 1;
+        commitOwnFaceDownCard(handIndex, card, drawIndex).then(
+          () => {
+            try {
+              dispatch({ type: "TIMEOUT", by: event.by, card });
+            } catch (err) {
+              console.error("[useMultiplayerGame] local TIMEOUT (own hidden turn) rejected by reducer", err);
+              recordViolation(
+                `local TIMEOUT (own hidden turn) failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          },
+          (err: unknown) => {
+            console.error("[useMultiplayerGame] failed to commit own hidden-timeout card", err);
+            recordViolation(
+              `failed to commit own hidden-timeout card: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          },
+        );
+        return;
+      }
+      opponentEvents.current.shift();
+      dispatch(event);
+      return;
+    }
     if (event.type !== "END_TURN") {
-      // Deliberate FIFO blocking: TIMEOUT and other opponent events are handled
-      // by the timer task and later. Until then they stall the queue, so say so
+      // Deliberate FIFO blocking: other opponent events (rematch, etc.) are
+      // handled by later tasks. Until then they stall the queue, so say so
       // once instead of hanging silently.
       warnOnce(`blocked:${event.type}`, `opponent event ${event.type} is not handled yet; queue blocked`);
       return;
@@ -650,6 +741,44 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
     );
   }
 
+  /**
+   * Reports the OPPONENT's turn as timed out (per spec, a player never
+   * self-reports its own timeout, so this is a no-op on my own turn).
+   * `useRemoteTimer` (Task 9) is the caller; this hook only owns the event
+   * logic. Two cases, told apart by the SAME `isFaceDownDraw` derivation the
+   * placement/draw effects already use:
+   *  - known card: the opponent's card already resolved locally (into
+   *    `state.pendingCard`, exactly like a normal turn) -> TIMEOUT.
+   *  - hidden card: I'm the selector and the opponent (the dealer) is on its
+   *    own face-down turn, the one case I can never learn the card before
+   *    it's placed -> TIMEOUT_HIDDEN (card-less).
+   * A safe no-op — never throws — whenever it's my own turn, we're not in
+   * "placing", or (known-card case) the card hasn't resolved yet.
+   */
+  function timeout(): void {
+    if (!role || state.phase !== "placing" || state.turn === you) return;
+    const opponent = state.turn;
+    const turnDrawIndex = state.pendingCard !== null ? state.drawCount - 1 : state.drawCount;
+    const hidden = role === "selector" && isFaceDownDraw(turnDrawIndex, opponent);
+    if (!hidden && state.pendingCard === null) return; // card not resolved yet: safe no-op
+    if (timedOutForDraw.current === turnDrawIndex) return; // already in flight
+    timedOutForDraw.current = turnDrawIndex;
+    const event: GameEvent = hidden
+      ? { type: "TIMEOUT_HIDDEN", by: opponent }
+      : { type: "TIMEOUT", by: opponent, card: state.pendingCard! };
+    try {
+      dispatch(event);
+    } catch (err) {
+      console.error("[useMultiplayerGame] local TIMEOUT rejected by reducer", err);
+      recordViolation(`local TIMEOUT failed: ${err instanceof Error ? err.message : String(err)}`);
+      timedOutForDraw.current = null;
+      return;
+    }
+    publishEvent(db, roomId, event, you).catch((err: unknown) => {
+      console.error("[useMultiplayerGame] failed to publish TIMEOUT", err);
+    });
+  }
+
   const isHumanTurn = state.turn === you && (state.phase === "placing" || state.phase === "replace");
   // Replace-phase legality arrives with the replace flow (a later task).
   const legalHands =
@@ -719,8 +848,8 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
     placePending,
     replace,
     hasViolation: violated,
-    // Stubs for later tasks (remote turn timer, rematch).
-    timeout: () => {},
+    timeout,
+    // Stub for a later task (rematch).
     playAgain: () => {},
   };
 }
