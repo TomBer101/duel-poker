@@ -104,6 +104,8 @@ export type GameEvent =
   | { type: "DRAW"; by: PlayerId; card: Card }
   | { type: "END_TURN"; by: PlayerId; handIndex: number; faceDown: boolean }
   | { type: "TIMEOUT"; by: PlayerId; card: Card }
+  /** Card-less sibling of TIMEOUT for a hidden turn neither client can see. */
+  | { type: "TIMEOUT_HIDDEN"; by: PlayerId }
   | { type: "REPLACE_DRAW"; by: PlayerId; card: Card }
   | { type: "REPLACE"; by: PlayerId; handIndex: number | null }
   /** Place a card the local client does not know (opponent's face-down card). */

@@ -141,6 +141,46 @@ describe("timeout and strikes", () => {
   });
 });
 
+describe("TIMEOUT_HIDDEN", () => {
+  it("auto-places a card-less face-down slot on the lowest legal hand and adds a strike", () => {
+    let s = solo();
+    s = gameReducer(s, { type: "TIMEOUT_HIDDEN", by: "p1" });
+    expect(s.hands.p1[0].cards).toEqual([{ faceUp: false }]);
+    expect(s.strikes.p1).toBe(1);
+    expect(s.turn).toBe("p2");
+    expect(s.drawCount).toBe(1);
+    expect(s.pendingCard).toBeNull();
+  });
+
+  it("three strikes forfeits the game with the same GameResult shape as TIMEOUT", () => {
+    const deck = orderedDeck();
+    let s = solo();
+    for (let i = 0; i < 3 && s.phase === "placing"; i++) {
+      s = gameReducer(s, { type: "TIMEOUT_HIDDEN", by: "p1" });
+      if (s.phase !== "placing") break;
+      s = gameReducer(s, { type: "DRAW", by: "p2", card: deck[s.drawCount] });
+      const h = getLegalHands(s.hands.p2)[0];
+      s = gameReducer(s, { type: "END_TURN", by: "p2", handIndex: h, faceDown: false });
+    }
+    expect(s.phase).toBe("result");
+    expect(s.forfeitedBy).toBe("p1");
+    expect(s.result).toEqual({ matchups: [], wins: { p1: 0, p2: 0 }, winner: "p2" });
+  });
+
+  it("rejects the wrong turn", () => {
+    const s = solo();
+    expect(() => gameReducer(s, { type: "TIMEOUT_HIDDEN", by: "p2" })).toThrow();
+  });
+
+  it("rejects the wrong phase", () => {
+    const { state } = autoPlacePlacingPhase(solo(), orderedDeck());
+    expect(state.phase).toBe("replace");
+    expect(() =>
+      gameReducer(state, { type: "TIMEOUT_HIDDEN", by: state.turn }),
+    ).toThrow();
+  });
+});
+
 describe("full game playthrough", () => {
   it("runs placing -> replace -> reveal -> result and is replay-deterministic", () => {
     const deck = orderedDeck();

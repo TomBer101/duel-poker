@@ -38,6 +38,7 @@ export function playEventSfx(event: GameEvent): void {
       sfx.play("card-flip");
       break;
     case "TIMEOUT":
+    case "TIMEOUT_HIDDEN":
       sfx.play("time-up");
       break;
     case "REMATCH":

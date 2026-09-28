@@ -56,6 +56,8 @@ export function gameReducer(state: GameState, event: GameEvent): GameState {
       return applyEndTurn(state, event.by, event.handIndex, event.faceDown);
     case "TIMEOUT":
       return applyTimeout(state, event.by, event.card);
+    case "TIMEOUT_HIDDEN":
+      return applyTimeoutHidden(state, event.by);
     case "REPLACE_DRAW":
       return applyReplaceDraw(state, event.by, event.card);
     case "REPLACE":
@@ -170,23 +172,45 @@ function applyTimeout(state: GameState, by: PlayerId, card: Card): GameState {
   const strikes = { ...state.strikes, [by]: state.strikes[by] + 1 };
 
   if (strikes[by] >= MAX_STRIKES) {
-    return {
-      ...state,
-      hands,
-      drawCount,
-      pendingCard: null,
-      strikes,
-      phase: "result",
-      forfeitedBy: by,
-      revealIndex: HANDS_PER_PLAYER,
-      result: { matchups: [], wins: { p1: 0, p2: 0 }, winner: otherPlayer(by) },
-    };
+    return forfeitState({ ...state, hands, drawCount, pendingCard: null, strikes }, by);
   }
 
   return advanceAfterPlacement(
     { ...state, hands, drawCount, pendingCard: null, strikes },
     by,
   );
+}
+
+function applyTimeoutHidden(state: GameState, by: PlayerId): GameState {
+  assert(state.phase === "placing", `cannot TIMEOUT_HIDDEN during phase "${state.phase}"`);
+  assert(state.turn === by, `TIMEOUT_HIDDEN.by must be the active player (${state.turn})`);
+
+  const handIndex = getAutoPlaceIndex(state.hands[by]);
+  const hands = { ...state.hands, [by]: [...state.hands[by]] };
+  hands[by][handIndex] = { cards: [...hands[by][handIndex].cards, { faceUp: false }] };
+
+  const drawCount = state.drawCount + 1;
+  const strikes = { ...state.strikes, [by]: state.strikes[by] + 1 };
+
+  if (strikes[by] >= MAX_STRIKES) {
+    return forfeitState({ ...state, hands, drawCount, pendingCard: null, strikes }, by);
+  }
+
+  return advanceAfterPlacement(
+    { ...state, hands, drawCount, pendingCard: null, strikes },
+    by,
+  );
+}
+
+/** Shared forfeit tail for TIMEOUT / TIMEOUT_HIDDEN once MAX_STRIKES is reached. */
+function forfeitState(state: GameState, by: PlayerId): GameState {
+  return {
+    ...state,
+    phase: "result",
+    forfeitedBy: by,
+    revealIndex: HANDS_PER_PLAYER,
+    result: { matchups: [], wins: { p1: 0, p2: 0 }, winner: otherPlayer(by) },
+  };
 }
 
 function advanceAfterPlacement(state: GameState, by: PlayerId): GameState {
