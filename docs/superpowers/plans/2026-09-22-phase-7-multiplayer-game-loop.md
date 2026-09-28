@@ -2297,6 +2297,53 @@ git commit -m "feat(ui): strike indicator dots for both players"
 
 ---
 
+### Task 10b: Engine — FORFEIT event
+
+**Why this task exists:** Task 11's original "claim win" sketch called
+`timeout()` three times in a row to force a 3-strikes forfeit. That does
+not work: `timeout()` dispatches synchronously against a `state` closure
+that does not change across three calls in the same synchronous loop, so
+the in-flight guard (`timedOutForDraw.current`) lets only the first call
+through — one strike, not three. Even fixed, the game rule requires three
+*consecutive actual turns* to time out; a disconnected opponent does not
+get three turns in a row while sitting disconnected. Claiming a win needs
+an immediate, one-shot forfeit — a different thing from the strike system.
+
+**Files:**
+- Modify: `src/engine/types.ts` (one new `GameEvent` variant)
+- Modify: `src/engine/reducer.ts`
+- Test: the reducer test file used by Tasks 5b/7b
+
+**Interfaces (produces, consumed by Task 11):**
+- `{ type: "FORFEIT"; by: PlayerId }` — `by` is the player who forfeits
+  (the disconnected one, NOT the claimer). No preconditions beyond
+  `state.phase !== "result"` (a forfeit can happen from any live phase —
+  placing, replace, or reveal — since disconnection isn't tied to a
+  specific phase). Reuses `forfeitState(state, by)` (the helper Task 7b
+  extracted from `applyTimeout`'s forfeit branch) directly — no strike
+  increment, no auto-placement, just the same forfeit `GameResult` shape
+  every other forfeit path already produces.
+
+- [ ] **Step 1: Write failing tests:** forfeits from each of `placing`,
+  `replace`, and `reveal` phase, producing the same `GameResult` shape
+  `applyTimeout`'s forfeit path does for the same `by`; rejects when
+  `phase === "result"` already.
+- [ ] **Step 2: Run to verify failure:** `pnpm test src/engine`
+- [ ] **Step 3: Implement** — `case "FORFEIT": return applyForfeit(state, event.by);`
+  where `applyForfeit` is a one-line call into the existing `forfeitState`
+  helper plus its precondition assert. Do not duplicate `forfeitState`'s
+  logic.
+- [ ] **Step 4:** `pnpm test`, `pnpm exec tsc -b`, `pnpm lint` — all green,
+  no existing test changed.
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/engine
+git commit -m "feat(engine): FORFEIT event for an immediate, one-shot forfeit (disconnect claim)"
+```
+
+---
+
 ### Task 11: Disconnect overlay
 
 **Files:**
@@ -2425,32 +2472,77 @@ export function DisconnectOverlay({ opponentPresent, onClaimWin }: DisconnectOve
 Run: `pnpm test src/ui/components/DisconnectOverlay.test.tsx`
 Expected: PASS
 
+> **CONTROLLER AMENDMENT — claimWin uses Task 10b's FORFEIT event, not a
+> timeout hack.** Add `claimWin(): void` to `useMultiplayerGame.ts`'s
+> return value (and to the `MultiplayerGame` type — it's multiplayer-only,
+> not part of the shared `SoloGame`/`GameHandle` shape, since solo has no
+> disconnect concept). It dispatches and publishes
+> `{ type: "FORFEIT", by: otherPlayer(you) }` — trusted as-is, no
+> commit-reveal verification needed (presence is written by the opponent's
+> own `onDisconnect` handler, not forgeable by the claimer). No-op if
+> `state.phase === "result"` already. Also add `FORFEIT` to the opponent-
+> event intake's handled set (applied directly, same trust level as
+> `TIMEOUT`) so a client that reconnects after the opponent already
+> claimed a win converges to the same result instead of hitting the
+> "blocked, not handled yet" warn-once fallback.
+
+Add to `useMultiplayerGame.ts` (near `timeout()`):
+
+```ts
+  function claimWin(): void {
+    if (!role || state.phase === "result") return;
+    const event: GameEvent = { type: "FORFEIT", by: otherPlayer(you) };
+    try {
+      dispatch(event);
+    } catch (err) {
+      console.error("[useMultiplayerGame] local FORFEIT rejected by reducer", err);
+      recordViolation(`local FORFEIT failed: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    publishEvent(db, roomId, event).catch((err: unknown) => {
+      console.error("[useMultiplayerGame] failed to publish FORFEIT", err);
+    });
+  }
+```
+
+And in the opponent-event intake effect (alongside the existing
+`REPLACE`/`TIMEOUT`/`TIMEOUT_HIDDEN` branches, before the `END_TURN`
+check):
+
+```ts
+    if (event.type === "FORFEIT") {
+      opponentEvents.current.shift();
+      dispatch(event);
+      return;
+    }
+```
+
+Add `claimWin` to the hook's return object and to `MultiplayerGame`'s type
+declaration near the top of the file.
+
 Wire into `GameScreen.tsx` for the multiplayer branch only (solo has no
-opponent presence to watch):
+opponent presence to watch). Note: reference `multiplayer.claimWin`
+directly, not `g.claimWin` — `claimWin` isn't on the shared `g` handle's
+type since solo doesn't have it:
 
 ```tsx
   const [opponentPresent, setOpponentPresent] = useState(true);
   useEffect(() => {
     if (!roomId) return;
     return subscribeToPresence(client.db, roomId, (presence) => {
-      setOpponentPresent(presence[otherPlayer(g.you)] === true);
+      setOpponentPresent(presence[otherPlayer(readYou(roomId))] === true);
     });
-  }, [roomId, client.db, g.you]);
-
-  function claimWin() {
-    // Forfeits the opponent via the same TIMEOUT->3-strikes path already
-    // in the reducer: three TIMEOUT dispatches in a row. Simpler than a
-    // new terminal event, and reuses tested reducer logic.
-    for (let i = 0; i < MAX_STRIKES; i++) g.timeout();
-  }
+  }, [roomId, client.db]);
 // ...
-        {roomId && <DisconnectOverlay opponentPresent={opponentPresent} onClaimWin={claimWin} />}
+        {roomId && (
+          <DisconnectOverlay opponentPresent={opponentPresent} onClaimWin={multiplayer.claimWin} />
+        )}
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/ui/components/DisconnectOverlay.tsx src/ui/components/DisconnectOverlay.module.css src/ui/components/DisconnectOverlay.test.tsx src/ui/screens/GameScreen.tsx
+git add src/ui/components/DisconnectOverlay.tsx src/ui/components/DisconnectOverlay.module.css src/ui/components/DisconnectOverlay.test.tsx src/ui/screens/GameScreen.tsx src/ui/hooks/useMultiplayerGame.ts
 git commit -m "feat(ui): disconnect overlay with 60s claim-win countdown"
 ```
 
