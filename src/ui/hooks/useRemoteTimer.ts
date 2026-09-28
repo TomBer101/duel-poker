@@ -54,7 +54,7 @@ export function useRemoteTimer(
     const intervalId = setInterval(tick, TICK_MS);
     tick();
     return () => clearInterval(intervalId);
-  }, [active, durationMs, db, roomId]);
+  }, [active, durationMs]);
 
   return Math.ceil((active ? msLeft : durationMs) / 1000);
 }

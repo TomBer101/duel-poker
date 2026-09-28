@@ -99,6 +99,13 @@ function replaceDrawIndex(player: PlayerId): number {
 const MAX_BATCH_PUBLISH_ATTEMPTS = 3;
 const BATCH_RETRY_DELAY_MS = 500;
 
+// Bound on waiting for MY OWN position reveal to land before falling back to
+// a literal card-less TIMEOUT_HIDDEN for my own hidden turn (see the intake
+// queue's TIMEOUT_HIDDEN handling) — an ordinary async round trip, not tied
+// to the 60s timeout window, so a few short retries cover it comfortably.
+const MAX_OWN_HIDDEN_TIMEOUT_RETRIES = 3;
+const OWN_HIDDEN_TIMEOUT_RETRY_DELAY_MS = 300;
+
 /** Normalises a REPLACE handIndex: Firebase drops `null`, so it may be undefined on the wire. */
 function validReplaceHand(handIndex: number | null | undefined): number | null | "invalid" {
   if (handIndex === null || handIndex === undefined) return null;
@@ -135,6 +142,13 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
   const replacedForDraw = useRef<number | null>(null);
   const timedOutForDraw = useRef<number | null>(null);
   const timedOutOwnHiddenForDraw = useRef<number | null>(null);
+  // Bounded wait for the "my own position reveal hasn't landed yet" branch
+  // below: a wall-clock deadline (NOT a per-effect-run counter — this effect
+  // has no dependency array and can rerun many times within the same
+  // millisecond as unrelated state settles, which would exhaust a naive
+  // invocation counter almost instantly regardless of real elapsed time).
+  // Reset whenever the draw index it's tracking changes.
+  const ownHiddenTimeoutDeadline = useRef<{ drawIndex: number; at: number } | null>(null);
   const batchPublished = useRef(false);
   const batchFailures = useRef(0);
   const verifyQueued = useRef(false);
@@ -509,13 +523,41 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
         // END_TURN -> PLACE_HIDDEN — and commit it exactly like `placePending`
         // would have, so the reveal-phase batch can still name and bind it.
         if (state.pendingCard === null) {
-          // Rare: my own position reveal hasn't landed either. I don't know
-          // the card any more than the opponent does, so apply it as-is.
+          // My own position reveal hasn't landed yet either — an ordinary
+          // async round trip, not tied to the 60s timeout window, so this is
+          // a normal "hasn't arrived on THIS render" event, not proof nobody
+          // will ever know the card. Wait up to a bounded deadline (same
+          // shape as the reveal-batch publish retry further below) before
+          // accepting defeat: only once it passes do I fall back to the
+          // literal card-less TIMEOUT_HIDDEN, at which point I genuinely
+          // know no more than the selector does.
+          //
+          // The bound is wall-clock time, not a per-effect-run counter: this
+          // effect has no dependency array and can rerun many times within
+          // the same millisecond as unrelated state settles (e.g. right
+          // after the turn flips), which would exhaust a naive invocation
+          // counter almost instantly regardless of how much real time has
+          // actually passed.
+          const now = Date.now();
+          if (ownHiddenTimeoutDeadline.current?.drawIndex !== state.drawCount) {
+            ownHiddenTimeoutDeadline.current = {
+              drawIndex: state.drawCount,
+              at: now + MAX_OWN_HIDDEN_TIMEOUT_RETRIES * OWN_HIDDEN_TIMEOUT_RETRY_DELAY_MS,
+            };
+          }
+          if (now < ownHiddenTimeoutDeadline.current.at) {
+            setTimeout(bumpTick, OWN_HIDDEN_TIMEOUT_RETRY_DELAY_MS); // force a re-check
+            return; // leave the event queued for the retry
+          }
           opponentEvents.current.shift();
           dispatch(event);
           return;
         }
         if (timedOutOwnHiddenForDraw.current === state.drawCount) return; // already in flight
+        // Cross-guard against a narrow race with placePending: if I already
+        // (or concurrently) placed this same draw myself via the UI, don't
+        // also commit+dispatch a translated TIMEOUT for it.
+        if (placedForDraw.current === state.drawCount) return;
         timedOutOwnHiddenForDraw.current = state.drawCount;
         opponentEvents.current.shift();
         const card = state.pendingCard;
@@ -774,9 +816,11 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
       timedOutForDraw.current = null;
       return;
     }
-    publishEvent(db, roomId, event, you).catch((err: unknown) => {
-      console.error("[useMultiplayerGame] failed to publish TIMEOUT", err);
-    });
+    publishEvent(db, roomId, event, you)
+      .then(() => publishTurnStarted(db, roomId))
+      .catch((err: unknown) => {
+        console.error("[useMultiplayerGame] failed to publish TIMEOUT", err);
+      });
   }
 
   const isHumanTurn = state.turn === you && (state.phase === "placing" || state.phase === "replace");
@@ -790,6 +834,11 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
     if (state.phase !== "placing" || state.turn !== you || !card) return;
     if (!legalHands.includes(handIndex)) return;
     if (placedForDraw.current === state.drawCount) return; // already in flight
+    // Cross-guard against a narrow race with the intake queue's own-hidden-
+    // timeout translation (see TIMEOUT_HIDDEN handling above): if that path
+    // already claimed this same draw, don't also dispatch a normal END_TURN
+    // for it.
+    if (timedOutOwnHiddenForDraw.current === state.drawCount) return;
     placedForDraw.current = state.drawCount;
 
     const faceDown = isFaceDownPlacement(state.hands[you][handIndex]);

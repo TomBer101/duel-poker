@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, test, beforeEach, vi } from "vitest";
+import { describe, expect, test, beforeEach, afterEach, vi } from "vitest";
 import { connectToEmulators, createFirebaseClient, signInAnonymous } from "../../net/firebase";
 import { loadSeed } from "../../crypto/seedStorage";
 import { publishDealer } from "../../net/roomState";
@@ -18,6 +18,36 @@ vi.mock("../sound/gameSounds", () => ({
   playResultSting: () => {},
 }));
 
+// Lets a test deterministically simulate "my own position reveal hasn't
+// landed yet" for exactly one draw index, by intercepting the outgoing wire
+// write instead of the network's real (near-instant) timing — used by the
+// own-hidden-timeout retry/fallback tests below. `mode: "block"` silently
+// swallows the write forever (simulates it never arriving); `{ delayMs }`
+// forwards it after a delay (simulates ordinary async lateness). Every other
+// export of net/sync passes through unchanged.
+type PositionRevealControl = { roomId: string; drawIndex: number; mode: "block" | { delayMs: number } } | null;
+let positionRevealControl: PositionRevealControl = null;
+
+vi.mock("../../net/sync", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../net/sync")>();
+  return {
+    ...actual,
+    publishReveal: (db: Database, roomId: string, reveal: ProtocolReveal) => {
+      const c = positionRevealControl;
+      if (c && reveal.kind === "position" && roomId === c.roomId && reveal.drawIndex === c.drawIndex) {
+        if (c.mode === "block") return Promise.resolve();
+        const { delayMs } = c.mode;
+        return new Promise<void>((resolve, reject) => {
+          setTimeout(() => {
+            actual.publishReveal(db, roomId, reveal).then(resolve, reject);
+          }, delayMs);
+        });
+      }
+      return actual.publishReveal(db, roomId, reveal);
+    },
+  };
+});
+
 const dummyConfig = {
   apiKey: "test-api-key",
   authDomain: "test.firebaseapp.com",
@@ -27,6 +57,29 @@ const dummyConfig = {
   messagingSenderId: "0",
   appId: "1:0:web:0",
 };
+
+/** Drives `count` alternating placing turns (p1 first), each client placing
+ *  its resolved card on its first legal hand. Shared by the timeout tests
+ *  that need to reach a specific turn (e.g. turn 30 = p1's first face-down
+ *  turn) without repeating the wait/act boilerplate. */
+async function drivePlacingTurns(
+  clients: Record<PlayerId, { result: { current: ReturnType<typeof useMultiplayerGame> } }>,
+  count: number,
+): Promise<void> {
+  for (let turn = 0; turn < count; turn++) {
+    const active = clients[turn % 2 === 0 ? "p1" : "p2"];
+    await waitFor(
+      () => {
+        expect(active.result.current.state.pendingCard).not.toBeNull();
+        expect(active.result.current.legalHands.length).toBeGreaterThan(0);
+      },
+      { timeout: 8000 },
+    );
+    await act(async () => {
+      await active.result.current.placePending(active.result.current.legalHands[0]);
+    });
+  }
+}
 
 let db: Database;
 let roomId: string;
@@ -39,6 +92,10 @@ beforeEach(async () => {
   db = client.db;
   roomId = `MPGAME${appCounter}`;
   appCounter++;
+});
+
+afterEach(() => {
+  positionRevealControl = null;
 });
 
 describe("useMultiplayerGame — shuffling and opening deal", () => {
@@ -457,6 +514,108 @@ describe("useMultiplayerGame - timeout", () => {
     expect(p1.result.current.hasViolation).toBe(false);
     expect(p2.result.current.hasViolation).toBe(false);
   }, 60000);
+
+  test("a hidden-turn timeout arriving before my own position reveal lands: retries, then applies the real card", async () => {
+    await publishDealer(db, roomId, "p1"); // p1 dealer, p2 selector
+
+    const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
+    const p2 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p2", gameNumber: 1 }));
+    const clients = { p1, p2 };
+    await waitFor(() => expect(p1.result.current.state.phase).toBe("placing"), { timeout: 5000 });
+
+    // Delay ONLY the position reveal for draw index 40 (p1's first
+    // face-down turn): short enough to comfortably land inside the retry
+    // bound (3 x 300ms, plus the downstream apply/dispatch round trip) even
+    // with emulator overhead, but long enough that it's virtually certain
+    // to still be in flight on the very first check.
+    positionRevealControl = { roomId, drawIndex: 40, mode: { delayMs: 150 } };
+
+    await drivePlacingTurns(clients, 30);
+
+    await waitFor(
+      () => {
+        expect(p1.result.current.state.turn).toBe("p1");
+        expect(p2.result.current.state.turn).toBe("p1");
+        expect(p1.result.current.state.phase).toBe("placing");
+      },
+      { timeout: 8000 },
+    );
+    // p1's own card has NOT resolved yet (the write is still delayed).
+    expect(p1.result.current.state.pendingCard).toBeNull();
+    expect(p2.result.current.state.pendingCard).toBeNull();
+
+    // p2 reports the timeout immediately, before p1 has any card to translate.
+    act(() => p2.result.current.timeout());
+
+    await waitFor(
+      () => {
+        expect(p1.result.current.state.strikes.p1).toBe(1);
+        expect(p2.result.current.state.strikes.p1).toBe(1);
+      },
+      { timeout: 8000 },
+    );
+
+    // The retry caught up once the delayed reveal landed: a real card on
+    // p1's own view, not the card-less fallback.
+    const dealerView = p1.result.current.state.hands.p1[0].cards;
+    const selectorView = p2.result.current.state.hands.p1[0].cards;
+    expect(dealerView[4].card).toBeDefined();
+    expect(dealerView[4].faceUp).toBe(false);
+    expect(selectorView[4].card).toBeUndefined();
+    expect(selectorView[4].faceUp).toBe(false);
+    expect(p1.result.current.state.drawCount).toBe(p2.result.current.state.drawCount);
+    expect(p1.result.current.hasViolation).toBe(false);
+    expect(p2.result.current.hasViolation).toBe(false);
+  }, 20000);
+
+  test("a hidden-turn timeout whose position reveal never lands: falls back to the card-less TIMEOUT_HIDDEN after the retry bound", async () => {
+    await publishDealer(db, roomId, "p1"); // p1 dealer, p2 selector
+
+    const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
+    const p2 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p2", gameNumber: 1 }));
+    const clients = { p1, p2 };
+    await waitFor(() => expect(p1.result.current.state.phase).toBe("placing"), { timeout: 5000 });
+
+    // Permanently swallow the position reveal for draw index 40: p1 can
+    // never resolve its own card for that turn, matching the selector.
+    positionRevealControl = { roomId, drawIndex: 40, mode: "block" };
+
+    await drivePlacingTurns(clients, 30);
+
+    await waitFor(
+      () => {
+        expect(p1.result.current.state.turn).toBe("p1");
+        expect(p2.result.current.state.turn).toBe("p1");
+        expect(p1.result.current.state.phase).toBe("placing");
+      },
+      { timeout: 8000 },
+    );
+    expect(p1.result.current.state.pendingCard).toBeNull();
+    expect(p2.result.current.state.pendingCard).toBeNull();
+
+    act(() => p2.result.current.timeout());
+
+    // The retry bound (3 x 300ms) must be exhausted before the fallback
+    // lands, so this genuinely waits past it.
+    await waitFor(
+      () => {
+        expect(p1.result.current.state.strikes.p1).toBe(1);
+        expect(p2.result.current.state.strikes.p1).toBe(1);
+      },
+      { timeout: 8000 },
+    );
+
+    // Card-less on BOTH clients now: p1 never learned it either.
+    const dealerView = p1.result.current.state.hands.p1[0].cards;
+    const selectorView = p2.result.current.state.hands.p1[0].cards;
+    expect(dealerView[4].card).toBeUndefined();
+    expect(dealerView[4].faceUp).toBe(false);
+    expect(selectorView[4].card).toBeUndefined();
+    expect(selectorView[4].faceUp).toBe(false);
+    expect(p1.result.current.state.drawCount).toBe(p2.result.current.state.drawCount);
+    expect(p1.result.current.hasViolation).toBe(false);
+    expect(p2.result.current.hasViolation).toBe(false);
+  }, 20000);
 
   test("timeout() is a safe no-op before setup completes and on my own turn", async () => {
     const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
