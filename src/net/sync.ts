@@ -112,7 +112,14 @@ export type ProtocolReveal =
       kind: "placementReveal";
       by: PlayerId;
       /** One batch per player, published once when the reveal phase starts. */
-      cards: { handIndex: number; cardId: string; saltHex: string }[];
+      cards: {
+        handIndex: number;
+        cardId: string;
+        saltHex: string;
+        /** Draw index that produced the card; bound to the deck commitment there. */
+        drawIndex: number;
+        deckSaltHex: string;
+      }[];
     };
 
 /** Appends a protocol message under /rooms/{roomId}/protocol/reveals. */

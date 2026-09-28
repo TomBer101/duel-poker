@@ -3,6 +3,8 @@ import {
   applyCardReveal,
   applyPlacementCommit,
   applyPlacementReveal,
+  receiveRevealBatch,
+  recordHiddenDraw,
   applyPositionReveal,
   commitPlacement,
   createProtocolState,
@@ -11,7 +13,7 @@ import {
   setCommitments,
 } from "./protocolController";
 import { generateDealerCommitments, generateSelectorCommitments } from "./protocol";
-import { generateSalt, generateSeed, verify } from "./commitment";
+import { generateSalt, generateSeed, saltToHex, verify } from "./commitment";
 import { cardId } from "../engine/deck";
 
 describe("protocolController", () => {
@@ -80,50 +82,115 @@ describe("protocolController", () => {
   });
 
   describe("placement commit / batched reveal", () => {
-    const heart = { suit: "Hearts" as const, rank: 14 as const };
-    const spade = { suit: "Spades" as const, rank: 7 as const };
+    const POS = { 0: 7, 1: 12 } as const; // hand -> deck position
+    const DRAW = { 0: 44, 1: 50 } as const; // hand -> draw index
 
-    test("verifies a batch against the commits and records it", async () => {
-      const s1 = generateSalt();
-      const s2 = generateSalt();
-      let state = applyPlacementCommit(createProtocolState(), 0, await commitPlacement(heart, 0, s1));
-      state = applyPlacementCommit(state, 3, await commitPlacement(spade, 3, s2));
-      state = await applyPlacementReveal(state, "p1", [
-        { handIndex: 0, card: heart, salt: s1 },
-        { handIndex: 3, card: spade, salt: s2 },
-      ]);
-      expect(hasViolation(state)).toBe(false);
-      expect(state.revealBatches.p1).toEqual({ 0: heart, 3: spade });
+    async function setup() {
+      const dealer = await generateDealerCommitments(generateSeed());
+      let state = setCommitments(createProtocolState(), "dealer", dealer.commitments);
+      state = { ...state, positions: { [DRAW[0]]: POS[0], [DRAW[1]]: POS[1] } };
+      state = recordHiddenDraw(state, 0, DRAW[0]);
+      state = recordHiddenDraw(state, 1, DRAW[1]);
+      const entry = async (hand: 0 | 1, salt = generateSalt()) => {
+        const card = dealer.deck[POS[hand]];
+        state = applyPlacementCommit(state, {
+          by: "p1",
+          dealer: "p1",
+          handIndex: hand,
+          commitment: await commitPlacement(card, hand, salt),
+        });
+        return {
+          handIndex: hand,
+          cardId: cardId(card),
+          saltHex: saltToHex(salt),
+          drawIndex: DRAW[hand],
+          deckSaltHex: saltToHex(dealer.salts[POS[hand]]),
+        };
+      };
+      return { dealer, entry, get: () => state, set: (s: typeof state) => (state = s) };
+    }
+
+    test("verifies a batch against commits and deck commitments and records it", async () => {
+      const t = await setup();
+      const entries = [await t.entry(0), await t.entry(1)];
+      const s = await applyPlacementReveal(t.get(), "p1", entries);
+      expect(hasViolation(s)).toBe(false);
+      expect(s.revealBatches.p1).toEqual({ 0: t.dealer.deck[POS[0]], 1: t.dealer.deck[POS[1]] });
     });
 
     test("the LATEST commit per hand wins", async () => {
-      const oldSalt = generateSalt();
-      const newSalt = generateSalt();
-      let state = applyPlacementCommit(createProtocolState(), 1, await commitPlacement(heart, 1, oldSalt));
-      state = applyPlacementCommit(state, 1, await commitPlacement(spade, 1, newSalt));
-      const stale = await applyPlacementReveal(state, "p1", [{ handIndex: 1, card: heart, salt: oldSalt }]);
+      const t = await setup();
+      const oldEntry = await t.entry(0);
+      const newEntry = await t.entry(0); // second commit for the same hand
+      expect(hasViolation(await applyPlacementReveal(t.get(), "p1", [newEntry]))).toBe(false);
+      const stale = await applyPlacementReveal(t.get(), "p1", [oldEntry]);
       expect(hasViolation(stale)).toBe(true);
       expect(stale.revealBatches.p1).toBeUndefined();
-      const fresh = await applyPlacementReveal(state, "p1", [{ handIndex: 1, card: spade, salt: newSalt }]);
-      expect(hasViolation(fresh)).toBe(false);
     });
 
-    test("wrong card, wrong salt, or a missing commit is a violation", async () => {
-      const salt = generateSalt();
-      const state = applyPlacementCommit(createProtocolState(), 0, await commitPlacement(heart, 0, salt));
-      const wrongCard = await applyPlacementReveal(state, "p1", [{ handIndex: 0, card: spade, salt }]);
-      const wrongSalt = await applyPlacementReveal(state, "p1", [{ handIndex: 0, card: heart, salt: generateSalt() }]);
-      const noCommit = await applyPlacementReveal(state, "p1", [{ handIndex: 2, card: heart, salt }]);
-      for (const s of [wrongCard, wrongSalt, noCommit]) {
-        expect(hasViolation(s)).toBe(true);
-        expect(s.revealBatches.p1).toBeUndefined();
+    test("tampering is a violation and records nothing", async () => {
+      const t = await setup();
+      const good = await t.entry(0);
+      const other = t.dealer.deck[(POS[0] + 1) % 52];
+      const cases: Record<string, Omit<typeof good, "handIndex"> & { handIndex: number }> = {
+        "wrong deck salt": { ...good, deckSaltHex: saltToHex(generateSalt()) },
+        "wrong drawIndex for the hand": { ...good, drawIndex: DRAW[1] },
+        "card not matching the commitment": { ...good, cardId: cardId(other) },
+        "hand never hidden": { ...good, handIndex: 3 },
+        "malformed card id": { ...good, cardId: "garbage" },
+      };
+      for (const [name, entry] of Object.entries(cases)) {
+        const s = await applyPlacementReveal(t.get(), "p1", [entry]);
+        expect(hasViolation(s), name).toBe(true);
+        expect(s.revealBatches.p1, name).toBeUndefined();
       }
     });
 
-    test("an empty batch verifies and is recorded", async () => {
-      const state = await applyPlacementReveal(createProtocolState(), "p2", []);
-      expect(hasViolation(state)).toBe(false);
-      expect(state.revealBatches.p2).toEqual({});
+    test("a card matching its own placement commit but not the deck commitment is a violation", async () => {
+      const t = await setup();
+      const fake = t.dealer.deck[(POS[0] + 1) % 52];
+      const salt = generateSalt();
+      const state = applyPlacementCommit(t.get(), {
+        by: "p1",
+        dealer: "p1",
+        handIndex: 0,
+        commitment: await commitPlacement(fake, 0, salt),
+      });
+      const s = await applyPlacementReveal(state, "p1", [
+        {
+          handIndex: 0,
+          cardId: cardId(fake),
+          saltHex: saltToHex(salt),
+          drawIndex: DRAW[0],
+          deckSaltHex: saltToHex(t.dealer.salts[POS[0]]),
+        },
+      ]);
+      expect(hasViolation(s)).toBe(true);
+      expect(s.violations[0]).toMatch(/deck commitment/);
+    });
+
+    test("a commit from a non-dealer or for a bad hand is a violation and never overwrites", async () => {
+      const base = applyPlacementCommit(createProtocolState(), { by: "p1", dealer: "p1", handIndex: 0, commitment: "real" });
+      for (const msg of [
+        { by: "p2" as const, dealer: "p1" as const, handIndex: 0, commitment: "evil" },
+        { by: "p1" as const, dealer: "p1" as const, handIndex: 9, commitment: "x" },
+        { by: "p1" as const, dealer: "p1" as const, handIndex: 0, commitment: 5 as unknown as string },
+      ]) {
+        const s = applyPlacementCommit(base, msg);
+        expect(hasViolation(s)).toBe(true);
+        expect(s.placementCommits[0]).toBe("real");
+      }
+    });
+
+    test("an empty batch verifies; a duplicate batch is a violation keeping the first", async () => {
+      const s = await applyPlacementReveal(createProtocolState(), "p2", []);
+      expect(hasViolation(s)).toBe(false);
+      expect(s.revealBatches.p2).toEqual({});
+      const once = receiveRevealBatch(createProtocolState(), "p1", []);
+      expect(hasViolation(once)).toBe(false);
+      const twice = receiveRevealBatch(once, "p1", [{ handIndex: 0, cardId: "x", saltHex: "", drawIndex: 0, deckSaltHex: "" }]);
+      expect(hasViolation(twice)).toBe(true);
+      expect(twice.receivedBatches.p1).toEqual([]);
     });
   });
 });

@@ -1,5 +1,6 @@
-import { commit, verify } from "./commitment";
-import { cardId } from "../engine/deck";
+import { commit, hexToSalt, verify } from "./commitment";
+import { HANDS_PER_PLAYER } from "../engine/constants";
+import { cardFromId, cardId } from "../engine/deck";
 import type { Card, PlayerId } from "../engine/types";
 
 export type ProtocolRole = "dealer" | "selector";
@@ -15,6 +16,10 @@ export type ProtocolControllerState = {
   placementCommits: Record<number, string>;
   /** Per player: hand index -> card, once that player's reveal batch verified. */
   revealBatches: Partial<Record<PlayerId, Record<number, Card>>>;
+  /** Selector-side: hand -> draw index of its latest hidden placement/swap. */
+  hiddenDraws: Record<number, number>;
+  /** Raw opponent batches awaiting verification (verified once the phase is reveal). */
+  receivedBatches: Partial<Record<PlayerId, PlacementRevealWire[]>>;
   /** Human-readable verification failures. Non-empty halts the game. */
   violations: string[];
 };
@@ -27,6 +32,8 @@ export function createProtocolState(): ProtocolControllerState {
     cards: {},
     placementCommits: {},
     revealBatches: {},
+    hiddenDraws: {},
+    receivedBatches: {},
     violations: [],
   };
 }
@@ -97,37 +104,104 @@ export function commitPlacement(card: Card, handIndex: number, salt: Uint8Array)
   return commit(`${cardId(card)}:${handIndex}`, salt);
 }
 
-/** Records a placement commitment; a later commit for the same hand replaces the earlier one. */
+/**
+ * Records a placement commitment; a later commit for the same hand replaces the
+ * earlier one. Only the dealer may commit, for a valid hand: anything else is a
+ * violation and never overwrites an existing commit.
+ */
 export function applyPlacementCommit(
   state: ProtocolControllerState,
-  handIndex: number,
-  commitment: string,
+  msg: { by: PlayerId; dealer: PlayerId; handIndex: number; commitment: string },
 ): ProtocolControllerState {
+  const { by, dealer, handIndex, commitment } = msg;
+  if (by !== dealer) return withViolation(state, `placement commit from non-dealer ${String(by)}`);
+  if (!Number.isInteger(handIndex) || handIndex < 0 || handIndex >= HANDS_PER_PLAYER) {
+    return withViolation(state, `placement commit for invalid hand ${String(handIndex)}`);
+  }
+  if (typeof commitment !== "string" || commitment.length === 0) {
+    return withViolation(state, `placement commit for hand ${handIndex} is not a string`);
+  }
   return { ...state, placementCommits: { ...state.placementCommits, [handIndex]: commitment } };
 }
 
-export type PlacementRevealCard = { handIndex: number; card: Card; salt: Uint8Array };
+/** Selector-side: the draw index of the card it just saw placed/swapped hidden (latest per hand wins). */
+export function recordHiddenDraw(
+  state: ProtocolControllerState,
+  handIndex: number,
+  drawIndex: number,
+): ProtocolControllerState {
+  return { ...state, hiddenDraws: { ...state.hiddenDraws, [handIndex]: drawIndex } };
+}
+
+/** Stores a player's raw batch for later verification; a second batch is a violation (first kept). */
+export function receiveRevealBatch(
+  state: ProtocolControllerState,
+  by: PlayerId,
+  entries: PlacementRevealWire[],
+): ProtocolControllerState {
+  if (state.receivedBatches[by] || state.revealBatches[by]) {
+    return withViolation(state, `duplicate placement reveal batch from ${by}`);
+  }
+  return { ...state, receivedBatches: { ...state.receivedBatches, [by]: entries } };
+}
+
+/** Wire shape of one batch entry (`net/sync.ts` mirrors it). */
+export type PlacementRevealWire = {
+  handIndex: number;
+  cardId: string;
+  saltHex: string;
+  /** Draw index that produced the card (face-down placing draw, or replace draw). */
+  drawIndex: number;
+  /** The dealer's per-position deck salt for the card at that draw's position. */
+  deckSaltHex: string;
+};
 
 /**
- * Verifies one player's batched reveal against the LATEST commit for each hand.
- * All-or-nothing: any mismatch or missing commit records a violation and the
- * batch is not recorded. An empty batch is valid (nothing hidden from the peer).
+ * Verifies one player's batched reveal. Per entry: (1) the hand was really
+ * hidden and at this drawIndex (selector's own record), (2) the card matches
+ * the LATEST placement commit for the hand, (3) the card matches the dealer's
+ * DECK commitment at the position the selector itself revealed for drawIndex.
+ * All-or-nothing: any failure records a violation and the batch is not
+ * recorded. An empty batch is valid.
  */
 export async function applyPlacementReveal(
   state: ProtocolControllerState,
   by: PlayerId,
-  cards: PlacementRevealCard[],
+  entries: PlacementRevealWire[],
 ): Promise<ProtocolControllerState> {
   const verified: Record<number, Card> = {};
-  for (const { handIndex, card, salt } of cards) {
-    const expected = state.placementCommits[handIndex];
-    if (!expected) {
-      return withViolation(state, `placement reveal for hand ${handIndex} has no commitment`);
+  try {
+    for (const e of entries) {
+      const { handIndex, drawIndex } = e;
+      if (handIndex in verified) {
+        return withViolation(state, `placement reveal lists hand ${handIndex} twice`);
+      }
+      if (state.hiddenDraws[handIndex] === undefined) {
+        return withViolation(state, `placement reveal for hand ${handIndex} which was never hidden`);
+      }
+      if (state.hiddenDraws[handIndex] !== drawIndex) {
+        return withViolation(state, `placement reveal for hand ${handIndex} names draw ${drawIndex}, expected ${state.hiddenDraws[handIndex]}`);
+      }
+      const card = cardFromId(e.cardId);
+      const expected = state.placementCommits[handIndex];
+      if (!expected) {
+        return withViolation(state, `placement reveal for hand ${handIndex} has no commitment`);
+      }
+      if ((await commitPlacement(card, handIndex, hexToSalt(e.saltHex))) !== expected) {
+        return withViolation(state, `placement reveal failed verification for hand ${handIndex}`);
+      }
+      const position = state.positions[drawIndex];
+      const deckCommitment = position === undefined ? undefined : state.dealerCommitments?.[position];
+      if (!deckCommitment) {
+        return withViolation(state, `no deck commitment for draw ${drawIndex} (hand ${handIndex})`);
+      }
+      if (!(await verify(cardId(card), hexToSalt(e.deckSaltHex), deckCommitment))) {
+        return withViolation(state, `placement reveal for hand ${handIndex} does not match the deck commitment`);
+      }
+      verified[handIndex] = card;
     }
-    if ((await commitPlacement(card, handIndex, salt)) !== expected) {
-      return withViolation(state, `placement reveal failed verification for hand ${handIndex}`);
-    }
-    verified[handIndex] = card;
+  } catch (err) {
+    return withViolation(state, `malformed placement reveal: ${err instanceof Error ? err.message : String(err)}`);
   }
   return { ...state, revealBatches: { ...state.revealBatches, [by]: verified } };
 }

@@ -6,7 +6,7 @@ import { publishDealer } from "../../net/roomState";
 import { useMultiplayerGame } from "./useMultiplayerGame";
 import { get, ref, type Database } from "firebase/database";
 import type { PlayerId } from "../../engine/types";
-import type { ProtocolReveal } from "../../net/sync";
+import { publishReveal, type ProtocolReveal } from "../../net/sync";
 
 // The DEAL event schedules 10 staggered `card-place` sfx via real setTimeouts
 // (see ui/sound/gameSounds.ts). jsdom doesn't implement HTMLMediaElement.play,
@@ -184,6 +184,7 @@ describe("useMultiplayerGame - replace and reveal phases", () => {
     const clients = await playToReplace(dealer);
     const selector = dealer === "p1" ? "p2" : "p1";
     const order: PlayerId[] = ["p1", "p2"];
+    let dealerSecretCardIds: string[] = [];
     for (const who of order) {
       const c = clients[who];
       await waitFor(
@@ -199,11 +200,28 @@ describe("useMultiplayerGame - replace and reveal phases", () => {
       await act(async () => {
         await c.result.current.replace(swap);
       });
-      if (who === dealer && dealer === "p1") {
+      if (who === dealer) {
+        // Ground truth for the wire scan below: the dealer's own view already
+        // knows every one of its 5 secret cards at this point.
+        dealerSecretCardIds = clients[dealer].result.current.state.hands[dealer].map(
+          (hand) => `${hand.cards[4].card!.suit}-${hand.cards[4].card!.rank}`,
+        );
         // Selector's view of the dealer's face-down slots holds no card yet.
-        await waitFor(() => expect(clients[selector].result.current.state.turn).toBe(selector), { timeout: 8000 });
-        for (const hand of clients[selector].result.current.state.hands[dealer]) {
-          expect(hand.cards[4].card).toBeUndefined();
+        // Only checkable when the dealer moves FIRST: it still has its own
+        // turn left afterwards, giving phase="replace" a beat before the
+        // dealer's batch (published once phase becomes "reveal") can land. When
+        // the dealer moves LAST, replaceDone flips both flags in the same
+        // reducer step the phase jumps straight to "reveal" and the batch may
+        // already be in flight by the time this assertion runs — that case is
+        // instead covered by the final "no card kind reveal ever carries a
+        // dealer secret cardId" scan below, which holds regardless of timing.
+        if (dealer === "p1") {
+          await waitFor(
+            () => expect(clients[selector].result.current.state.turn).toBe(selector),
+            { timeout: 8000 },
+          );
+          const dealerHands = clients[selector].result.current.state.hands[dealer];
+          for (const hand of dealerHands) expect(hand.cards[4].card).toBeUndefined();
         }
       }
     }
@@ -236,6 +254,11 @@ describe("useMultiplayerGame - replace and reveal phases", () => {
     expect(all.filter((r) => r.kind === "placementReveal" && r.by === selector)).toHaveLength(1);
     // Initial 5 commits, plus one per hidden swap.
     expect(all.filter((r) => r.kind === "placementCommit")).toHaveLength(5 + (dealerSwap === null ? 0 : 1));
+    // Post-hoc confirmation: the dealer's secret cardIds never leaked as a
+    // "card" reveal anywhere in the full transcript either.
+    for (const r of all) {
+      if (r.kind === "card") expect(dealerSecretCardIds).not.toContain(r.cardId);
+    }
   }
 
   test("dealer (p1) swaps into a hidden slot, selector passes: both reach the same result", async () => {
@@ -245,4 +268,70 @@ describe("useMultiplayerGame - replace and reveal phases", () => {
   test("dealer (p2) passes, selector swaps: both reach the same result", async () => {
     await playReplaceAndCheck("p2", null, 1);
   }, 90000);
+
+  test("dealer (p2) swaps into a hidden slot (secret replace-draw index 51), selector passes", async () => {
+    await playReplaceAndCheck("p2", 3, null);
+  }, 90000);
+
+  test("a rogue placementCommit (not from the dealer) is a violation on both clients, blocking the reveal", async () => {
+    const dealer: PlayerId = "p1";
+    const selector: PlayerId = "p2";
+    const clients = await playToReplace(dealer);
+    for (const who of ["p1", "p2"] as const) {
+      await waitFor(() => expect(clients[who].result.current.state.pendingCard).not.toBeNull(), { timeout: 8000 });
+      await act(async () => {
+        await clients[who].result.current.replace(null);
+      });
+    }
+    // Inject a forged commit claiming to be from the dealer's own hand 0, but
+    // published by the selector — before the dealer's legitimate batch lands.
+    await publishReveal(db, roomId, {
+      kind: "placementCommit",
+      by: selector,
+      handIndex: 0,
+      commitment: "forged-commitment",
+    });
+    await waitFor(
+      () => {
+        expect(clients.p1.result.current.hasViolation).toBe(true);
+        expect(clients.p2.result.current.hasViolation).toBe(true);
+      },
+      { timeout: 8000 },
+    );
+    // A short settle: the violation must permanently block REVEAL_FACE_DOWN.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // The dealer's own client already knows every one of its cards locally
+    // (it placed them), so its `result` is computed by the reducer the
+    // instant both players finish replacing — independent of REVEAL_FACE_DOWN.
+    // Only the selector needs the dealer's verified batch to fill in its
+    // blanks, so the violation must keep *its* result null forever.
+    expect(clients[selector].result.current.state.phase).toBe("reveal");
+    expect(clients[selector].result.current.state.result).toBeNull();
+  }, 30000);
+
+  test("a placement reveal batch from an unexpected sender is a violation, not a hang", async () => {
+    const dealer: PlayerId = "p1";
+    const clients = await playToReplace(dealer);
+    for (const who of ["p1", "p2"] as const) {
+      await waitFor(() => expect(clients[who].result.current.state.pendingCard).not.toBeNull(), { timeout: 8000 });
+      await act(async () => {
+        await clients[who].result.current.replace(null);
+      });
+    }
+    await waitFor(() => expect(clients.p1.result.current.state.phase).toBe("reveal"), { timeout: 8000 });
+    // A batch claiming to be from a bogus sender — a real client would never
+    // publish this, but the wire format doesn't stop a malicious one from trying.
+    await publishReveal(db, roomId, {
+      kind: "placementReveal",
+      by: "p3" as unknown as PlayerId,
+      cards: [],
+    });
+    await waitFor(
+      () => {
+        expect(clients.p1.result.current.hasViolation).toBe(true);
+        expect(clients.p2.result.current.hasViolation).toBe(true);
+      },
+      { timeout: 8000 },
+    );
+  }, 30000);
 });

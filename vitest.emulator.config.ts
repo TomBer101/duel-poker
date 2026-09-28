@@ -13,5 +13,7 @@ export default defineConfig({
     globals: true,
     environment: "node",
     include: ["src/**/*.emulator.test.ts"],
+    // jsdom hook tests run under vitest.emulator.jsdom.config.ts (test:emulator:ui).
+    exclude: ["src/ui/**", "node_modules/**"],
   },
 });

@@ -144,8 +144,8 @@ describe("publishReveal / subscribeToReveals", () => {
       kind: "placementReveal",
       by: "p1",
       cards: [
-        { handIndex: 0, cardId: "Spades-7", saltHex: "aa" },
-        { handIndex: 3, cardId: "Hearts-14", saltHex: "bb" },
+        { handIndex: 0, cardId: "Spades-7", saltHex: "aa", drawIndex: 44, deckSaltHex: "cc" },
+        { handIndex: 3, cardId: "Hearts-14", saltHex: "bb", drawIndex: 50, deckSaltHex: "dd" },
       ],
     };
     await publishReveal(db, roomId, batch);
