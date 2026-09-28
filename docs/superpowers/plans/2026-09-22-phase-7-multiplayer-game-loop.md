@@ -2115,10 +2115,28 @@ export function GameScreen() {
 }
 ```
 
+> **CONTROLLER RULING (2026-09-28), replacing the wiring sketch this
+> amendment originally had here.** An implementer correctly stopped and
+> reported NEEDS_CONTEXT on the sketch that used to be here: it gated
+> `useRemoteTimer`'s `active`/`onExpire` on `isHumanTurn`, but `timeout()`
+> is guaranteed to no-op on my own turn (only the non-active player may
+> report a timeout — see Task 8). Under that wiring, an opponent's timeout
+> would NEVER be detected. The fix needs TWO `useRemoteTimer` instances:
+> one for the on-screen countdown during MY turn (as before, `onExpire` is
+> harmless there since `timeout()` self-guards), and a second, silent one
+> that watches the OPPONENT's turn and is the one that actually triggers a
+> report. The second instance's returned `number` is unused — it's called
+> for its `onExpire` side effect only. Gate the second instance on
+> `!isHumanTurn && phase === "placing"` with no `pendingCard` requirement:
+> the 60s deadline covers the whole turn from `turnStartedAt`, not just
+> the post-draw window (multiplayer's `canDraw` is always false — the
+> card auto-resolves near-instantly once the turn starts, so this mirrors
+> solo's UX closely enough without needing to replicate the exact gate).
+
 Wire `useRemoteTimer` into `GameScreen` for the multiplayer branch,
-alongside the existing `useTimer` call (both are cheap no-ops when their
-`active` argument is false, so calling both unconditionally is safe and
-keeps hook-call order stable across renders):
+alongside the existing `useTimer` call (all three timer hooks are cheap
+no-ops when their `active` argument is false, so calling them
+unconditionally is safe and keeps hook-call order stable across renders):
 
 ```tsx
 import { useRemoteTimer } from "../hooks/useRemoteTimer";
@@ -2127,19 +2145,19 @@ import { useRemoteTimer } from "../hooks/useRemoteTimer";
   const localSeconds = useTimer(!roomId && timerActive, TURN_TIMEOUT_MS, g.timeout);
   const remoteSeconds = useRemoteTimer(client.db, roomId ?? "", !!roomId && timerActive, TURN_TIMEOUT_MS, g.timeout);
   const secondsLeft = roomId ? remoteSeconds : localSeconds;
-```
 
-`timerActive` gating on `isHumanTurn` matches solo's existing behavior —
-but recall Task 8's `timeout()` on the multiplayer hook only ever does
-something when it is NOT my turn (the non-active player reports). Wiring
-`g.timeout` as `onExpire` here is still correct: `useRemoteTimer`'s
-`active` here only controls the LOCAL player's own countdown display; the
-opponent-timeout-detection path is a separate, already-built concern
-inside `useMultiplayerGame` itself (Task 8) that this task does not need
-to duplicate. If this composition turns out wrong once you trace it
-against the actual `useRemoteTimer`/`timeout()` code, STOP and report
-NEEDS_CONTEXT rather than guessing — this is exactly the kind of drift
-this whole task exists to catch.
+  // Detects and reports the OPPONENT's timeout — separate from the display
+  // countdown above. Its return value is intentionally unused; only
+  // onExpire's side effect (calling g.timeout(), which no-ops unless
+  // state.turn !== you) matters here.
+  useRemoteTimer(
+    client.db,
+    roomId ?? "",
+    !!roomId && !g.isHumanTurn && g.state.phase === "placing",
+    TURN_TIMEOUT_MS,
+    g.timeout,
+  );
+```
 
 Add two lines to `useLobby.ts` (both `create` and `join`, right after
 `setYou("p1")` / `setYou("p2")`) to persist `you` for navigation:
