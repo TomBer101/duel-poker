@@ -1971,92 +1971,45 @@ git commit -m "feat(ui): useRemoteTimer — server-anchored turn countdown"
 
 ---
 
-### Task 9: Extract a shared `GameHandle` type, then wire `GameScreen` to pick solo vs. multiplayer
+### Task 9: Wire `GameScreen` to pick solo vs. multiplayer by route
+
+> **CONTROLLER AMENDMENT (2026-09-28, supersedes the "extract GameHandle"
+> framing below).** By the time this task is reached, `useMultiplayerGame.ts`
+> already defines `export type MultiplayerGame = Omit<SoloGame, "aiThinking"> &
+> { aiThinking: false; hasViolation: boolean }` — it derives its shape FROM
+> `SoloGame` directly rather than both hooks conforming to a separate
+> `GameHandle` file. This already achieves the original goal (a field renamed
+> on `SoloGame` breaks `useMultiplayerGame`'s type immediately) without a
+> third file. **Do not create `src/ui/hooks/gameHandle.ts` or touch
+> `SoloGame`'s type.** `timeout()` is also already fully implemented (Task 8,
+> including hidden-turn handling and a bounded retry) — do not touch its
+> logic. This task's real remaining scope is just the three items below.
 
 **Files:**
-- Create: `src/ui/hooks/gameHandle.ts`
-- Modify: `src/ui/hooks/useSoloGame.ts` (its `SoloGame` type becomes an
-  alias of `GameHandle` — no behavior change)
 - Modify: `src/ui/screens/GameScreen.tsx`
-- Modify: `src/ui/hooks/useMultiplayerGame.ts` (implement the `timeout()`
-  stub from Task 6; return type becomes `GameHandle`)
+- Modify: `src/ui/hooks/useLobby.ts` (two lines — persist `you` across navigation)
 - Test: `src/ui/screens/GameScreen.test.tsx` (new — the existing screen had
   none; add one covering the route branch)
-
-**Why this comes first in this task:** solo and multiplayer independently
-converged on the same shape by design (`GameScreen` was always meant to
-treat them interchangeably), but nothing enforced it — a field renamed on
-one side wouldn't fail a type check on the other. Extracting the type now,
-before `GameScreen` starts consuming both, makes that enforced rather than
-coincidental.
-
-- [ ] **Step 0: Extract `GameHandle` and point both hooks at it**
-
-```ts
-// src/ui/hooks/gameHandle.ts
-import type { Card, GameEvent, GameState, PlayerId } from "../../engine/types";
-
-/**
- * The shape `GameScreen` drives regardless of mode. `useSoloGame` and
- * `useMultiplayerGame` both return this — solo's AI turns set
- * `aiThinking`, multiplayer's opponent-verification turns never do
- * (there's no local AI to wait on; the wait is on the network instead,
- * which `isHumanTurn` already excludes from being actionable).
- */
-export type GameHandle = {
-  state: GameState;
-  getEvents: () => readonly GameEvent[];
-  you: PlayerId;
-  legalHands: number[];
-  canDraw: boolean;
-  isHumanTurn: boolean;
-  aiThinking: boolean;
-  draw: () => void;
-  placePending: (handIndex: number) => void;
-  replaceDraw: () => void;
-  replace: (handIndex: number | null) => void;
-  timeout: () => void;
-  playAgain: () => void;
-};
-```
-
-```ts
-// src/ui/hooks/useSoloGame.ts — replace the existing `SoloGame` type
-import type { GameHandle } from "./gameHandle";
-
-export type SoloGame = GameHandle;
-```
-
-Run `pnpm exec tsc -b` after this alone — it should still pass with zero
-other changes, confirming `useSoloGame`'s actual return value already
-satisfied `GameHandle` structurally. If it doesn't, the mismatch it
-reports is exactly the drift this step exists to catch; fix `useSoloGame`
-(not `GameHandle`) to match, since `GameHandle` is the contract
-`GameScreen`, `ResultOverlay`, etc. are written against.
-
-`useMultiplayerGame`'s return statement (built up across Tasks 5-8) should
-also be annotated `: GameHandle` once this file exists — add that
-annotation now as part of this step; it will fail to compile until Steps
-1-4 below finish wiring `timeout()`, which is expected and resolves within
-this same task. (Task 15 later widens this to
-`GameHandle & { protocolViolation: boolean }`.)
 
 **Interfaces:**
 - Consumes: `useParams` (`react-router-dom`, already used by
   `LobbyScreen.tsx`), `useFirebaseClient` (`app/firebaseContext.ts`),
-  `useRemoteTimer` (Task 8), `useMultiplayerGame` (Tasks 5-7).
-- Produces: `GameScreen` renders `useSoloGame` on `/solo`, `useMultiplayerGame`
-  on `/room/:roomId` (reading `you`/`gameNumber` from `sessionStorage`,
-  written by `useLobby` — see the note below).
+  `useRemoteTimer` (Task 8 — signature confirmed:
+  `useRemoteTimer(db, roomId, active, durationMs, onExpire): number`),
+  `useMultiplayerGame` (Tasks 5-8 — signature confirmed:
+  `useMultiplayerGame({ db, roomId, you, gameNumber }): MultiplayerGame`).
+- Produces: `GameScreen` renders `useSoloGame()` on `/solo`,
+  `useMultiplayerGame(...)` on `/room/:roomId` (reading `you`/`gameNumber`
+  from `sessionStorage`, written by `useLobby` — see below).
 
 **Note on `you`/`gameNumber` plumbing:** `useLobby` currently keeps `you`
 only in React state, lost on navigation to `/room/:roomId`. Add two lines
-to `useLobby.ts`'s `create`/`join` to also
-`sessionStorage.setItem(`duelPoker-you-${id}`, "p1"|"p2")` (mirrors the
-existing `duelPoker-{roomId}:{gameNumber}` key shape from
-`seedStorage.ts`), and have `GameScreen` read it back. `gameNumber` starts
-at `1` and is otherwise driven by RTDB's `/rooms/{roomId}/gameNumber`
-(Task 11).
+to `useLobby.ts`'s `create`/`join` (right after `setYou(...)`) to also
+write `sessionStorage.setItem("duelPoker-you-" + id, "p1")` / `"p2"`
+(mirrors the existing `duelPoker-{roomId}:{gameNumber}:{player}` key shape
+from `seedStorage.ts`), and have `GameScreen` read it back. `gameNumber`
+starts at `1` here and is driven by RTDB's `/rooms/{roomId}/gameNumber`
+starting in Task 12 (rematch) — hardcode `1` in this task.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2067,38 +2020,24 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { GameScreen } from "./GameScreen";
 
-vi.mock("../hooks/useSoloGame", () => ({
-  useSoloGame: () => ({
-    state: { phase: "placing", pendingCard: null, hands: { p1: [], p2: [] } },
-    you: "p1",
-    legalHands: [],
-    canDraw: false,
-    isHumanTurn: false,
-    aiThinking: false,
-    draw: vi.fn(),
-    placePending: vi.fn(),
-    replaceDraw: vi.fn(),
-    replace: vi.fn(),
-    timeout: vi.fn(),
-    playAgain: vi.fn(),
-  }),
-}));
+const handle = {
+  state: { phase: "placing", pendingCard: null, hands: { p1: [], p2: [] }, strikes: { p1: 0, p2: 0 } },
+  you: "p1",
+  legalHands: [],
+  canDraw: false,
+  isHumanTurn: false,
+  aiThinking: false,
+  draw: vi.fn(),
+  placePending: vi.fn(),
+  replaceDraw: vi.fn(),
+  replace: vi.fn(),
+  timeout: vi.fn(),
+  playAgain: vi.fn(),
+};
 
+vi.mock("../hooks/useSoloGame", () => ({ useSoloGame: () => handle }));
 vi.mock("../hooks/useMultiplayerGame", () => ({
-  useMultiplayerGame: () => ({
-    state: { phase: "placing", pendingCard: null, hands: { p1: [], p2: [] } },
-    you: "p2",
-    legalHands: [],
-    canDraw: false,
-    isHumanTurn: false,
-    aiThinking: false,
-    draw: vi.fn(),
-    placePending: vi.fn(),
-    replaceDraw: vi.fn(),
-    replace: vi.fn(),
-    timeout: vi.fn(),
-    playAgain: vi.fn(),
-  }),
+  useMultiplayerGame: () => ({ ...handle, you: "p2", hasViolation: false }),
 }));
 
 vi.mock("../../app/firebaseContext", () => ({
@@ -2161,9 +2100,8 @@ export function GameScreen() {
   });
   // Both hooks always run (hooks can't be called conditionally); only one
   // result is used. `useMultiplayerGame` no-ops its Firebase subscriptions
-  // when `roomId` is empty — see the early-return guard added to each of
-  // its effects in Task 5 (`if (!role) return;` already covers this, since
-  // `dealer` never resolves for an empty room id).
+  // when `roomId` is empty (`role` never resolves for an empty room id, and
+  // every effect guards on `role`).
   const g = roomId ? multiplayer : solo;
 
   // ...rest of the function body is unchanged, except the outer wrapper:
@@ -2177,43 +2115,38 @@ export function GameScreen() {
 }
 ```
 
-Implement the multiplayer `timeout()` (Task 6 stub) now that
-`useRemoteTimer` exists to drive it:
-
-```ts
-// in useMultiplayerGame.ts
-  async function timeout() {
-    if (state.turn !== you || state.phase !== "placing") return;
-    // The engine's TIMEOUT event needs the pending card; if none is
-    // pending yet, the reveal chain hasn't resolved this draw in time —
-    // wait for it rather than fabricating a card (multiplayer, unlike
-    // solo, can't invent a card locally: neither client holds the deck).
-    if (!state.pendingCard) return;
-    dispatch({ type: "TIMEOUT", by: you, card: state.pendingCard });
-    await publishEndTurn(
-      db,
-      roomId,
-      { type: "TIMEOUT", by: you, card: state.pendingCard },
-      otherPlayer(you),
-    );
-    await publishTurnStarted(db, roomId);
-  }
-```
-
 Wire `useRemoteTimer` into `GameScreen` for the multiplayer branch,
-replacing the single `useTimer` call:
+alongside the existing `useTimer` call (both are cheap no-ops when their
+`active` argument is false, so calling both unconditionally is safe and
+keeps hook-call order stable across renders):
 
 ```tsx
+import { useRemoteTimer } from "../hooks/useRemoteTimer";
+// ...
   const timerActive = g.isHumanTurn && g.state.phase === "placing" && g.state.pendingCard !== null;
   const localSeconds = useTimer(!roomId && timerActive, TURN_TIMEOUT_MS, g.timeout);
   const remoteSeconds = useRemoteTimer(client.db, roomId ?? "", !!roomId && timerActive, TURN_TIMEOUT_MS, g.timeout);
   const secondsLeft = roomId ? remoteSeconds : localSeconds;
 ```
 
-(Both `useTimer` and `useRemoteTimer` are cheap no-ops when their `active`
-argument is false, so calling both unconditionally — same pattern as the
-solo/multiplayer hook split above — is safe and keeps hook-call order
-stable across renders.)
+`timerActive` gating on `isHumanTurn` matches solo's existing behavior —
+but recall Task 8's `timeout()` on the multiplayer hook only ever does
+something when it is NOT my turn (the non-active player reports). Wiring
+`g.timeout` as `onExpire` here is still correct: `useRemoteTimer`'s
+`active` here only controls the LOCAL player's own countdown display; the
+opponent-timeout-detection path is a separate, already-built concern
+inside `useMultiplayerGame` itself (Task 8) that this task does not need
+to duplicate. If this composition turns out wrong once you trace it
+against the actual `useRemoteTimer`/`timeout()` code, STOP and report
+NEEDS_CONTEXT rather than guessing — this is exactly the kind of drift
+this whole task exists to catch.
+
+Add two lines to `useLobby.ts` (both `create` and `join`, right after
+`setYou("p1")` / `setYou("p2")`) to persist `you` for navigation:
+
+```ts
+sessionStorage.setItem("duelPoker-you-" + id, "p1"); // and "p2" in join()
+```
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -2223,7 +2156,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/ui/screens/GameScreen.tsx src/ui/screens/GameScreen.test.tsx src/ui/hooks/useMultiplayerGame.ts src/ui/hooks/useLobby.ts
+git add src/ui/screens/GameScreen.tsx src/ui/screens/GameScreen.test.tsx src/ui/hooks/useLobby.ts
 git commit -m "feat(ui): wire GameScreen to solo/multiplayer by route, add remote turn timer"
 ```
 
