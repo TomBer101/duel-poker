@@ -1788,6 +1788,54 @@ git commit -m "feat(engine): TIMEOUT_HIDDEN for a timed-out turn neither client 
 
 ### Task 8: Remote turn timer
 
+> **CONTROLLER AMENDMENT (2026-09-25, supersedes conflicting text below).**
+> Task 7b added `TIMEOUT_HIDDEN { by }` (engine-only; no wiring). This task
+> wires BOTH `timeout()` variants into `useMultiplayerGame.ts` and finally
+> closes the intake queue's TIMEOUT gap (Task 6/7 left it warn-once/no-op).
+> Read the CURRENT `useMultiplayerGame.ts` first (it has `updateProtocol`,
+> the opponent-event intake FIFO with `isFaceDownDraw`/`isFaceDownPlacement`
+> cross-checks, `ownSecretDraw`, `warnOnce`).
+>
+> 1. **Who may write TIMEOUT.** Per spec, only the NON-active player writes
+>    it (the player whose turn it is does not self-report). So `timeout()`
+>    on this hook only ever does something when `!isHumanTurn &&
+>    state.turn === <opponent>` — i.e. it's called when the LOCAL player's
+>    remote timer (driven by `useRemoteTimer`, wired in `GameScreen` —
+>    that wiring is Task 9, not this task) expires while it's the
+>    OPPONENT's turn. This task only builds `timeout()`'s logic and a unit/
+>    emulator-testable trigger for it; do not add the `GameScreen` timer
+>    UI here (Task 9's job) — call `timeout()` directly from the test.
+> 2. **Known-card case** (opponent's own turn is not a face-down turn, or
+>    it's the selector's face-down turn where the dealer already knows the
+>    card): if the opponent's card has already resolved into MY local
+>    `state.pendingCard` (or I otherwise know it — the selector always
+>    knows the dealer's non-face-down cards and its own), dispatch
+>    `TIMEOUT { by: opponent, card }` locally and publish it via
+>    `publishEndTurn`, same pattern as `placePending`. If the card has NOT
+>    resolved yet (I don't have it), there is nothing to publish yet —
+>    `useRemoteTimer` in Task 9 should keep the countdown at 0 rather than
+>    calling `timeout()` in a tight loop; this hook's `timeout()` should be
+>    a safe no-op when called with no usable card (do not throw).
+> 3. **Hidden-card case** (my opponent is the dealer, on the dealer's own
+>    face-down turn, and I am the selector — the one case where I can
+>    NEVER learn the card before it's placed): dispatch `TIMEOUT_HIDDEN {
+>    by: opponent }` locally and publish it via `publishEndTurn`.
+>    Use the SAME `isFaceDownDraw`-based derivation Task 6 already built
+>    to decide which case applies — do not add a second way to compute
+>    this.
+> 4. **Intake queue.** Replace the TIMEOUT/TIMEOUT_HIDDEN "warn and block"
+>    behavior: an opposing `TIMEOUT` event (I am the dealer receiving the
+>    selector's report of MY timeout, or vice versa) is applied directly —
+>    it always carries a card the sender legitimately had. An opposing
+>    `TIMEOUT_HIDDEN` is applied directly with no cross-check needed
+>    beyond `by === state.turn` (the sender cannot have fabricated a card;
+>    there isn't one). Remove these two event types from the "blocks the
+>    queue" warn-once path; they should have been handled since Task 6/7
+>    but a real trigger for testing them didn't exist until now.
+> 5. **Strike indicator data is unaffected** (Task 10 reads `state.strikes`
+>    regardless of which TIMEOUT variant produced it) — no change needed
+>    there when this task lands.
+
 **Files:**
 - Create: `src/ui/hooks/useRemoteTimer.ts`
 - Test: `src/ui/hooks/useRemoteTimer.test.ts`
