@@ -1740,6 +1740,52 @@ git commit -m "feat(ui): useMultiplayerGame — replace phase and reveal-phase v
 
 ---
 
+### Task 7b: Engine — TIMEOUT_HIDDEN
+
+**Why this task exists:** `TIMEOUT { by, card }` requires a `Card`, but per
+spec ("TIMEOUT: only the non-active player can write") the opponent
+detects and reports a timeout, not the player who timed out. On the
+dealer's own face-down turn, the opponent (selector) is exactly the client
+that does NOT know the card, and — unlike a normal turn — a hidden turn
+never populates `pendingCard` on the opponent's side at all (PLACE_HIDDEN
+collapses draw+place into one card-less event, so there is nothing for
+`TIMEOUT`'s "reuse the already-pending card" branch to fall back on
+either). A card-less sibling event is needed, mirroring `PLACE_HIDDEN`.
+
+**Files:**
+- Modify: `src/engine/types.ts` (one new `GameEvent` variant)
+- Modify: `src/engine/reducer.ts`
+- Test: the reducer test file used by Task 5b
+
+**Interfaces (produces, consumed by Task 8):**
+- `{ type: "TIMEOUT_HIDDEN"; by: PlayerId }` — same preconditions as
+  `TIMEOUT` (`phase === "placing"`, `turn === by`), no `card`/`handIndex`
+  parameter. Auto-places via the existing `getAutoPlaceIndex(hands[by])`
+  (deterministic from hand shapes both clients already see identically,
+  so no coordination is needed — same reasoning as `PLACE_HIDDEN`'s
+  determinism). Adds a strike; `drawCount: state.drawCount + 1`
+  unconditionally (a hidden turn never separately drew — same as
+  `PLACE_HIDDEN`). Reaching `MAX_STRIKES` forfeits exactly like `TIMEOUT`
+  does today (share the forfeit branch, don't duplicate it).
+
+- [ ] **Step 1: Write failing tests** (table-driven, same file as Task 5b):
+  auto-places on the lowest-index legal hand as `{ faceUp: false }` (no
+  `card`); adds a strike; forfeits at `MAX_STRIKES` with the same
+  `GameResult` shape `applyTimeout` produces; rejects wrong phase/turn.
+- [ ] **Step 2: Run to verify failure:** `pnpm test src/engine`
+- [ ] **Step 3: Implement**, sharing the forfeit branch with `applyTimeout`
+  (extract a small helper if that's cleaner than duplicating it).
+- [ ] **Step 4:** `pnpm test`, `pnpm exec tsc -b`, `pnpm lint` — all green,
+  no existing test changed.
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/engine
+git commit -m "feat(engine): TIMEOUT_HIDDEN for a timed-out turn neither client can see"
+```
+
+---
+
 ### Task 8: Remote turn timer
 
 **Files:**
