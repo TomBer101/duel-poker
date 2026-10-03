@@ -42,6 +42,7 @@ export function playEventSfx(event: GameEvent): void {
       sfx.play("time-up");
       break;
     case "REMATCH":
+    case "FORFEIT":
       break;
   }
 }

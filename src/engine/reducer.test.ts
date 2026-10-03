@@ -186,6 +186,45 @@ describe("TIMEOUT_HIDDEN", () => {
   });
 });
 
+describe("FORFEIT", () => {
+  it("forfeits from the placing phase with the same GameResult shape as TIMEOUT", () => {
+    const s = gameReducer(solo(), { type: "FORFEIT", by: "p1" });
+    expect(s.phase).toBe("result");
+    expect(s.forfeitedBy).toBe("p1");
+    expect(s.result).toEqual({ matchups: [], wins: { p1: 0, p2: 0 }, winner: "p2" });
+  });
+
+  it("forfeits from the replace phase", () => {
+    const deck = orderedDeck();
+    const { state } = autoPlacePlacingPhase(solo(), deck);
+    expect(state.phase).toBe("replace");
+    const s = gameReducer(state, { type: "FORFEIT", by: "p2" });
+    expect(s.phase).toBe("result");
+    expect(s.forfeitedBy).toBe("p2");
+    expect(s.result).toEqual({ matchups: [], wins: { p1: 0, p2: 0 }, winner: "p1" });
+  });
+
+  it("forfeits from the reveal phase", () => {
+    const deck = orderedDeck();
+    let s = autoPlacePlacingPhase(solo(), deck).state;
+    s = gameReducer(s, { type: "REPLACE_DRAW", by: "p1", card: deck[s.drawCount] });
+    s = gameReducer(s, { type: "REPLACE", by: "p1", handIndex: null });
+    s = gameReducer(s, { type: "REPLACE_DRAW", by: "p2", card: deck[s.drawCount] });
+    s = gameReducer(s, { type: "REPLACE", by: "p2", handIndex: null });
+    expect(s.phase).toBe("reveal");
+    s = gameReducer(s, { type: "FORFEIT", by: "p1" });
+    expect(s.phase).toBe("result");
+    expect(s.forfeitedBy).toBe("p1");
+    expect(s.result).toEqual({ matchups: [], wins: { p1: 0, p2: 0 }, winner: "p2" });
+  });
+
+  it("rejects a FORFEIT once the game is already in the result phase", () => {
+    const s = gameReducer(solo(), { type: "FORFEIT", by: "p1" });
+    expect(s.phase).toBe("result");
+    expect(() => gameReducer(s, { type: "FORFEIT", by: "p2" })).toThrow();
+  });
+});
+
 describe("full game playthrough", () => {
   it("runs placing -> replace -> reveal -> result and is replay-deterministic", () => {
     const deck = orderedDeck();

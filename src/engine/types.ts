@@ -115,4 +115,10 @@ export type GameEvent =
   /** Fill every card-less face-down slot; index i is hand i's 5th card. */
   | { type: "REVEAL_FACE_DOWN"; cards: Record<PlayerId, Card[]> }
   | { type: "ADVANCE_REVEAL" }
-  | { type: "REMATCH"; dealer: PlayerId };
+  | { type: "REMATCH"; dealer: PlayerId }
+  /**
+   * Immediate, one-shot forfeit claimed against a disconnected opponent —
+   * distinct from the 3-strikes TIMEOUT/TIMEOUT_HIDDEN system. `by` is the
+   * player who forfeits (the disconnected one, not the claimer).
+   */
+  | { type: "FORFEIT"; by: PlayerId };

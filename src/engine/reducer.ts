@@ -72,6 +72,8 @@ export function gameReducer(state: GameState, event: GameEvent): GameState {
       return applyAdvanceReveal(state);
     case "REMATCH":
       return createInitialState({ mode: state.mode, firstTurn: event.dealer });
+    case "FORFEIT":
+      return applyForfeit(state, event.by);
   }
 }
 
@@ -212,6 +214,16 @@ function forfeitState(state: GameState, by: PlayerId): GameState {
     revealIndex: HANDS_PER_PLAYER,
     result: { matchups: [], wins: { p1: 0, p2: 0 }, winner: otherPlayer(by) },
   };
+}
+
+/**
+ * Immediate, one-shot forfeit claimed against a disconnected opponent — valid
+ * from any live phase (placing, replace, reveal), unlike TIMEOUT which is
+ * placing-only. Reuses `forfeitState` directly: no strike, no auto-placement.
+ */
+function applyForfeit(state: GameState, by: PlayerId): GameState {
+  assert(state.phase !== "result", "cannot FORFEIT once the game already has a result");
+  return forfeitState(state, by);
 }
 
 function advanceAfterPlacement(state: GameState, by: PlayerId): GameState {
