@@ -2860,6 +2860,8 @@ git commit -m "feat(ui): session score tracked and shown on the result overlay"
 
 ### Task 14: Refresh recovery
 
+> **CARRY-OVERS (2026-10-03), mandatory scope for this task.** (1) The hook now lives in `src/ui/hooks/multiplayer/` (see Task 10d's map): put recovery in its own `useRecovery.ts` called from the root, not inlined. (2) **Presence must be (re)established on the game page and survive reconnects.** Today `setupPresence` (`net/sync.ts`) arms `onDisconnect(false)` once and writes `true` once, never re-arms on reconnect, and is only called from the lobby. After a refresh of the game page or any connection drop, that player's presence stays `false`: the opponent's DisconnectOverlay never clears and they can claim a win against a live player. Fix: call setupPresence when the game page mounts, and re-arm on Firebase `.info/connected` becoming true (add a `subscribeToConnection`-style helper in `net/` with an emulator test; keep `net/` the only firebase importer). (3) The FORFEIT echo rule ignores the claimer's own FORFEIT event, so after a refresh the claimer replaying history would never reach `result`: replay must apply FORFEIT for the claimer too (dedupe replayed events by push key). (4) Dedupe of replayed events by push key is required (see the TODO in `useOpponentEvents.ts`).
+
 **Files:**
 - Modify: `src/ui/hooks/useMultiplayerGame.ts`
 - Test: `src/ui/hooks/useMultiplayerGame.emulator.test.ts` (extend)
