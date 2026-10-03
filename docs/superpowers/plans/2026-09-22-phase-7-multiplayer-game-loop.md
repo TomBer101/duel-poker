@@ -2612,130 +2612,72 @@ git commit -m "feat(ui): disconnect overlay with 60s claim-win countdown"
 
 ---
 
-### Task 12: Rematch flow
+### Task 12a: Make Phase 7 work against the REAL database (dealer bootstrap + security rules + real-rules tests)
+
+**Why this task exists (found 2026-10-03, while preparing the rematch task).** Tasks 1-11 pass all their tests but the game would not work against the real database:
+1. **Nothing writes `protocol/dealer`.** `publishDealer` is only called from tests. In the real flow both clients wait forever for the dealer announcement. Game 1's dealer is the room creator (p1).
+2. **`database.rules.json` only knows `seats`, `meta`, `presence` and `events`.** Default-deny blocks every Phase 7 path: `protocol/*` (dealer, commitments, reveals), `meta/turnStartedAt`, `rematch`, `score`, `gameNumber`. The `events` rule also whitelists only DEAL / ADVANCE_REVEAL / REMATCH / TIMEOUT / DRAW / END_TURN / REPLACE_DRAW / REPLACE, so `TIMEOUT_HIDDEN` and `FORFEIT` are rejected. The existing hook emulator tests did not notice because the vitest namespace (`test-default-rtdb`) is not the project's default instance and so runs with OPEN rules.
+3. Deletes needed by rematch (`events: null`, `protocol: ...`) are denied by the `events/$pushId` rule (`!data.exists()`).
 
 **Files:**
-- Modify: `src/ui/hooks/useMultiplayerGame.ts` (implement `playAgain()`)
-- Modify: `src/ui/screens/GameScreen.tsx` (pass rematch state to `ResultOverlay`)
-- Test: `src/ui/hooks/useMultiplayerGame.emulator.test.ts` (extend)
+- Modify: `src/net/room.ts` (createRoom also writes `protocol/dealer: "p1"`; keep the existing two-step write ordering and its comment; the `protocol/dealer` write must come after `seats/p1` is committed because rules will read the seat) and `room.test.ts` / `room.emulator.test.ts`.
+- Modify: `database.rules.json`.
+- Modify: `src/net/rules.emulator.test.ts` (extend; it uses `@firebase/rules-unit-testing` which loads the rules explicitly, so it DOES enforce them).
+- Modify: the multiplayer hook emulator test setup so it runs against the REAL rules with TWO real clients (see below).
+- Modify: `src/net/roomState.ts`: `resetForRematch` must set `meta/turn` to `"p1"` (the placing schedule always starts with p1 regardless of dealer; the dealer only decides who shuffles) and `meta/turnStartedAt`; fix its test, which currently asserts the turn equals the next dealer.
 
-**Interfaces:**
-- Consumes: `publishRematchVote`, `subscribeToRematch`, `resetForRematch`,
-  `subscribeToGameNumber` (`net/roomState.ts`, Task 4).
-- Produces: `playAgain()` votes for a rematch; once both players have
-  voted, one deterministic client (`you === "p1"`, avoiding a double
-  reset race) calls `resetForRematch`, flipping the dealer. Both clients'
-  `useGameEngine` gets a fresh `REMATCH` dispatch once the new
-  `gameNumber` and `dealer` are observed, restarting Task 5's shuffle
-  effects (the hook's `dealt`/`publishedPosition`/etc. refs must reset too).
+**Rules to write** (principles: authenticated seated players only; a player may only write as their own seat; reveals and commitments are write-once; nothing a client sends can impersonate the other seat):
+- `protocol/dealer`: write by a seated player; validate `'p1'|'p2'`; allowed on creation by p1 (createRoom) and by the rematch reset (see below).
+- `protocol/commitments/dealer`: only the seat equal to `protocol/dealer` may write, write-once (`!data.exists()`), validate it is an array of 52 strings. `protocol/commitments/selector`: only the OTHER seat, same constraints.
+- `protocol/reveals/$id`: seated players; `by` must equal the writer's own seat; `kind` one of `position|card|placementCommit|placementReveal`; write-once (`!data.exists()`); `position`/`card` reveals: `position` kind only from the selector seat, `card` kind only from the dealer seat; `placementCommit` only from the dealer seat. `placementReveal` from either seat. Keep it as tight as is practical, but note a `placementCommit` MAY be written more than once per hand (latest wins) by design, which is fine because each push id is new.
+- `events/$pushId`: write-once; the allowed types are now `END_TURN`, `REPLACE` (author = `by` = `meta/turn` and writer is that seat; keep the existing turn gate), `TIMEOUT` and `TIMEOUT_HIDDEN` (`by` names the TIMED-OUT player; the writer must be the OTHER seat), `FORFEIT` (`by` names the forfeiting/disconnected player; the writer must be the OTHER seat). Keep or drop DEAL / DRAW / REPLACE_DRAW / ADVANCE_REVEAL / REMATCH consistently with what clients actually publish (they publish none of those now): prefer removing dead types, and say so in the report. Note `publishEvent` writes the event and `meta/turn` in one multi-path update; the real backend evaluates rules against the pre-write state of siblings, so the turn gate must keep working for that shape (an existing comment in `room.ts` explains the same production behaviour).
+- `meta/turnStartedAt`: write by a seated player; validate `newData.val() == now`.
+- `rematch/$p`: a player may write ONLY their own seat's flag, validate boolean true.
+- `gameNumber`: seated player, validate a positive integer that equals the previous value + 1 (or 1 when absent).
+- `score/$p`: seated player, validate a number that is the previous value + 1 (or 1 when absent) (the winner's client increments).
+- Rematch reset deletes: allow deleting `events` and `protocol` and `rematch` (and writing the new `protocol/dealer`, `gameNumber`, `meta/turn`) ONLY when both `rematch/p1` and `rematch/p2` are `true` in the current data. Because the reset is one multi-path update evaluated against pre-write state, this condition is checkable.
+- Reads: seated players and (as today) authenticated users for `events`; `rooms/$roomId` read stays authenticated.
+- Do not loosen anything that exists today (seat rules, passwordHash, presence).
 
-- [ ] **Step 1: Write the failing test**
+**Rules tests (table-driven, in `rules.emulator.test.ts`, via `assertSucceeds` / `assertFails`):** for EVERY rule above: one allowed case and at least one denied case (wrong seat, impersonated `by`, second write to a write-once node, non-seated user, bad shape, out-of-turn END_TURN, a non-reporter writing TIMEOUT_HIDDEN, self-reported FORFEIT, rematch delete before both votes, rematch delete after both votes, gameNumber skipping a number).
 
-```ts
-// append to src/ui/hooks/useMultiplayerGame.emulator.test.ts
-test("both players voting rematch resets the log and flips the dealer", async () => {
-  await publishDealer(db, roomId, "p1");
-  const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
-  const p2 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p2", gameNumber: 1 }));
-  await waitFor(() => expect(p1.result.current.state.phase).toBe("placing"), { timeout: 5000 });
+**Real-rules, two-client hook tests:** change the emulator test setup used by `src/ui/hooks/multiplayer/useMultiplayerGame.emulator.test.ts` (and any other emulator test that plays the protocol) so that (a) the real `database.rules.json` is loaded into the namespace the clients use (for example with `initializeTestEnvironment` for the same namespace, or an HTTP `PUT /.settings/rules.json?ns=<namespace>` to the emulator; pick what works and document it in the test setup), (b) the two players are TWO Firebase clients with DISTINCT anonymous users (`createFirebaseClient` already takes an app name), and (c) the room is created via the real `createRoom` (p1) and `joinRoom` (p2) rather than by calling `publishDealer` directly. All existing assertions must keep passing unchanged. If any Task 5-11 behavior is rejected by the real rules, that is a bug in either the rules or the client: fix the rules where the client behavior is intended; if the client does something unintended, STOP and report it.
 
-  await act(async () => p1.result.current.playAgain());
-  await act(async () => p2.result.current.playAgain());
+**Out of scope:** rematch UI/hook logic (Task 12), score logic (Task 13), presence reconnect (Task 14).
 
-  await waitFor(
-    () => {
-      expect(p1.result.current.state.turn).toBe("p2"); // dealer flipped, deals first
-      expect(p1.result.current.state.drawCount).toBe(0);
-    },
-    { timeout: 5000 },
-  );
-});
-```
+- [ ] Steps: write the failing rules tests first; implement rules + createRoom + resetForRematch; make the hook tests run under the real rules; run `pnpm test`, `pnpm test:emulator`, `pnpm test:emulator:ui` x3, `pnpm exec tsc -b`, `pnpm lint`. Commit in explicit-path commits (suggested: `feat(net): createRoom announces the first dealer`, `feat(net): security rules for the Phase 7 protocol paths and events`, `test(ui): run the multiplayer hook tests under the real security rules with two clients`).
 
-- [ ] **Step 2: Run test to verify it fails**
+---
 
-Run: `pnpm test:emulator:ui` (runs every *.emulator.test.ts under src/ui via the jsdom+emulator config added in Task 5 Step 0)
-Expected: FAIL — `playAgain` still a no-op.
+### Task 12: Rematch flow
 
-- [ ] **Step 3: Implement**
+> **REWRITTEN 2026-10-03** (the original had design flaws: a test that re-rendered one hook instance with a fixed `gameNumber`; a `key` on a div inside GameScreen cannot remount hooks that are called in GameScreen itself; and dispatching the engine `REMATCH` would hand the first turn to the dealer while the draw schedule always has p1 placing first). Read `src/ui/hooks/multiplayer/` first (hook split, Task 10d). Task 12a already provides the rules, `protocol/dealer` bootstrap, and the corrected `resetForRematch` (sets `meta/turn` to p1). Do NOT dispatch the engine `REMATCH` event in multiplayer.
 
-```ts
-  async function playAgain() {
-    await publishRematchVote(db, roomId, you);
-  }
-```
+**Design:** a rematch is a REMOUNT. Everything per-game (refs, protocol state, seeds keyed by `gameNumber`, engine state) is reset by mounting a fresh game keyed by the room's `gameNumber`, rather than by clearing a dozen refs.
 
-```ts
-  useEffect(() => {
-    return subscribeToRematch(db, roomId, async (votes) => {
-      if (votes.p1 && votes.p2 && you === "p1") {
-        const nextDealer = otherPlayer(dealer ?? "p1");
-        await resetForRematch(db, roomId, nextDealer, gameNumber + 1);
-      }
-    });
-  }, [db, roomId, you, dealer, gameNumber]);
-```
+**Files:**
+- Create: `src/ui/hooks/multiplayer/useRematch.ts` (called from the root hook)
+- Modify: `src/ui/hooks/multiplayer/myMoves.ts` (`playAgain`), the root `useMultiplayerGame.ts` (expose `playAgain` and `rematchRequested`), `context.ts` if needed
+- Modify: `src/ui/screens/GameScreen.tsx`: split into a small outer `GameScreen` and an inner `GameScreenBody`
+- Modify: `src/ui/components/ResultOverlay.tsx` (+ test): show a waiting state after you voted
+- Tests: `src/ui/screens/GameScreen.test.tsx`, `src/ui/hooks/multiplayer/useMultiplayerGame.emulator.test.ts`, `ResultOverlay.test.tsx`
 
-Reset local refs and re-dispatch `REMATCH` when a new `gameNumber` shows up:
+**Behavior:**
+- `playAgain()` (multiplayer): `publishRematchVote(db, roomId, you)`; idempotent. The handle exposes `rematchRequested: boolean`, true once MY vote is observed in `subscribeToRematch`.
+- `useRematch`: subscribes to rematch votes. When BOTH are true and `you === "p1"` (deterministic, avoids a double reset), call `resetForRematch(db, roomId, otherPlayer(currentDealer), gameNumber + 1)` exactly once per `gameNumber` (ref guard, `.catch` logging, no unhandled rejection).
+- `GameScreen` (outer): for `/room/:roomId`, subscribe to `subscribeToGameNumber` and render `<GameScreenBody key={gameNumber} roomId=... gameNumber={gameNumber} />`; for `/solo` render `<GameScreenBody key="solo" />`. `GameScreenBody` is today's component taking `roomId`/`gameNumber` as props. The `key` change is what remounts the hooks. Solo's `playAgain` stays as is.
+- `ResultOverlay`: when the multiplayer handle's `rematchRequested` is true, the "Play again" button shows "Waiting for opponent…" and is disabled; the Home link stays.
+- The new mount re-derives the dealer from `protocol/dealer` (flipped by the reset), generates a NEW seed (seeds are keyed by `(roomId, gameNumber, you)`), and runs the shuffle from scratch.
 
-```ts
-  useEffect(() => {
-    return subscribeToGameNumber(db, roomId, (n) => {
-      if (n <= gameNumber) return;
-      // A parent (GameScreen) owns `gameNumber` as a route/state value in
-      // a real deployment; this hook instance is remounted with the new
-      // gameNumber by that parent once it observes the bump. Nothing to
-      // do here beyond letting the effect fire once, which happens
-      // naturally on remount — this subscription exists purely so
-      // GameScreen has something to key off of (see Task 13).
-    });
-  }, [db, roomId, gameNumber]);
-```
+**Required tests:**
+1. Unit (`GameScreen.test.tsx`): when the mocked `subscribeToGameNumber` delivers 2, the multiplayer hook is called again with `gameNumber: 2` and the body REMOUNTS (assert via a mount counter in the mock).
+2. Emulator (real rules, two clients, from Task 12a): play to the result phase (reuse the existing fast path), both call `playAgain()`; assert the room's `gameNumber` becomes 2, `protocol/dealer` flipped, `events`, `protocol/reveals`, `rematch` cleared; then mount two NEW hook instances with `gameNumber: 2` and assert they reach the opening deal (`drawCount >= 10`) with the dealer role swapped (the old dealer is now selector) and different commitments from game 1.
+3. `useRematch`: only p1 triggers the reset and only once; one vote alone does nothing.
+4. `ResultOverlay`: waiting state rendering.
 
-Note for the implementer: `useMultiplayerGame` takes `gameNumber` as a
-prop rather than tracking it internally, matching `useSoloGame`'s
-`firstTurn` pattern — the caller (`GameScreen`, Task 13) owns bumping it
-and remounting the hook via a `key`, which is the simplest way to reset
-every `useRef` (`dealt`, `publishedPosition`, `protocol`, etc.) without
-manually clearing a dozen refs.
+Out of scope: session score (Task 13), presence (Task 14).
 
-Update `GameScreen.tsx`:
-
-```tsx
-  const [gameNumber, setGameNumber] = useState(1);
-  useEffect(() => {
-    if (!roomId) return;
-    return subscribeToGameNumber(client.db, roomId, setGameNumber);
-  }, [roomId, client.db]);
-
-  const multiplayer = useMultiplayerGame({
-    db: client.db,
-    roomId: roomId ?? "",
-    you: roomId ? readYou(roomId) : "p1",
-    gameNumber,
-  });
-```
-
-Because `gameNumber` is now a hook argument that changes, React remounts
-the *internal* refs are still stale across a `gameNumber` change unless the
-whole hook instance remounts — add `key={gameNumber}` to whichever
-component tree renders per-game state, e.g. wrap the board section:
-
-```tsx
-      <div className={styles.screen} data-testid="game-screen" key={roomId ? gameNumber : "solo"}>
-```
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `pnpm test:emulator:ui` (runs every *.emulator.test.ts under src/ui via the jsdom+emulator config added in Task 5 Step 0)
-Expected: PASS
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/ui/hooks/useMultiplayerGame.ts src/ui/hooks/useMultiplayerGame.emulator.test.ts src/ui/screens/GameScreen.tsx
-git commit -m "feat(ui): rematch flow — vote, reset room state, flip dealer"
-```
+- [ ] Steps: failing tests first; implement; `pnpm test`, `pnpm test:emulator:ui` x3, `pnpm test:emulator`, `pnpm exec tsc -b`, `pnpm lint`; explicit-path commits (suggested: `feat(ui): rematch voting and room reset`, `feat(ui): remount the game per gameNumber`).
 
 ---
 
