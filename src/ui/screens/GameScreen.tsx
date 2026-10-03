@@ -44,26 +44,22 @@ export function GameScreen() {
 
   const drag = useDragPlacement({ legalHands: g.legalHands, onPlace: place });
 
-  // The engine only auto-places on timeout during the placing phase (there is
-  // no replace-phase equivalent yet), and only once a card has actually been
-  // drawn is there anything to place — so the countdown runs only then.
+  // Solo: the countdown runs only once a card has been drawn (the engine
+  // auto-places on timeout during placing only).
   const timerActive = g.isHumanTurn && placing && pending !== null;
   const localSeconds = useTimer(!roomId && timerActive, TURN_TIMEOUT_MS, g.timeout);
-  const remoteSeconds = useRemoteTimer(client.db, roomId ?? "", !!roomId && timerActive, TURN_TIMEOUT_MS, g.timeout);
-  const secondsLeft = roomId ? remoteSeconds : localSeconds;
-
-  // Detects and reports the OPPONENT's timeout — separate from the display
-  // countdown above. `timeout()` self-guards to a no-op unless it's not my
-  // turn (see useMultiplayerGame's `timeout()`), so this only ever has an
-  // effect on the non-active player's client. Its return value is
-  // intentionally unused; only onExpire's side effect matters here.
-  useRemoteTimer(
+  // Multiplayer: ONE turn-aware timer serves both turns. `timeout()` is a
+  // no-op on my own turn and reports the opponent's timeout on theirs.
+  const remoteSeconds = useRemoteTimer(
     client.db,
     roomId ?? "",
-    !!roomId && !g.isHumanTurn && state.phase === "placing",
+    !!roomId && placing,
     TURN_TIMEOUT_MS,
     g.timeout,
+    `${state.phase}:${state.turn}`,
   );
+  const secondsLeft = roomId ? remoteSeconds : localSeconds;
+  const showTimer = roomId ? g.isHumanTurn && placing : timerActive;
 
   const revealCount =
     state.phase === "reveal" ? state.revealIndex : state.phase === "result" ? 5 : 0;
@@ -88,7 +84,7 @@ export function GameScreen() {
           reveal={revealCount}
           canDraw={g.canDraw}
           onDraw={drawCard}
-          timerSeconds={timerActive ? secondsLeft : undefined}
+          timerSeconds={showTimer ? secondsLeft : undefined}
         >
           {g.isHumanTurn && pending && (
             <>

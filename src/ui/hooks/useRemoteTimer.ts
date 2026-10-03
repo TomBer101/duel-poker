@@ -21,29 +21,40 @@ export function useRemoteTimer(
   active: boolean,
   durationMs: number,
   onExpire: () => void,
+  turnKey: string,
 ): number {
   const [msLeft, setMsLeft] = useState(durationMs);
   const startedAt = useRef<number | null>(null);
   const onExpireRef = useRef(onExpire);
   const firedRef = useRef(false);
+  const stale = useRef<number | null>(null);
   useEffect(() => {
     onExpireRef.current = onExpire;
   });
 
+  // Declared before the subscription effect so a reset always runs first
+  // within a commit.
+  useEffect(() => {
+    stale.current = startedAt.current ?? stale.current;
+    startedAt.current = null;
+    firedRef.current = false;
+  }, [turnKey, active]);
+
   useEffect(() => {
     if (!active) return;
     return subscribeToTurnStarted(db, roomId, (at) => {
+      if (at === stale.current) return;
       startedAt.current = at;
     });
   }, [db, roomId, active]);
 
   useEffect(() => {
-    if (!active) {
-      firedRef.current = false;
-      return;
-    }
+    if (!active) return;
     const tick = () => {
-      if (startedAt.current === null) return;
+      if (startedAt.current === null) {
+        setMsLeft(durationMs);
+        return;
+      }
       const left = Math.max(0, durationMs - (Date.now() - startedAt.current));
       setMsLeft(left);
       if (left <= 0 && !firedRef.current) {
@@ -54,7 +65,7 @@ export function useRemoteTimer(
     const intervalId = setInterval(tick, TICK_MS);
     tick();
     return () => clearInterval(intervalId);
-  }, [active, durationMs]);
+  }, [active, durationMs, turnKey]);
 
   return Math.ceil((active ? msLeft : durationMs) / 1000);
 }

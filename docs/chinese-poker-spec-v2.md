@@ -109,7 +109,7 @@ src/
       Deck.tsx             Draw pile
       DrawnCard.tsx        The card waiting to be placed (draggable)
       DropTarget.tsx       Legal hand indicator for drag-and-drop
-      Timer.tsx            Turn countdown (60s)
+      Timer.tsx            Turn countdown (90s)
       StrikeIndicator.tsx  Strike dots (●●○)
       DisconnectOverlay.tsx  "Waiting for opponent… 0:47"
       RevealSequence.tsx   Hand-by-hand reveal animation
@@ -392,7 +392,7 @@ Validates legality, applies the event, transitions phase when appropriate. Throw
 2. Player drags card onto a legal hand (tentative, can move it between hands)
 3. Player clicks **End Turn** → `END_TURN` event published with final placement
 4. Reducer validates, applies, clears `pendingCard`, flips `turn`, resets timer
-5. **Timeout (60s):** auto-place on lowest-index legal hand, increment strikes. **3 strikes = forfeit.**
+5. **Timeout (90s):** auto-place on lowest-index legal hand, increment strikes. **3 strikes = forfeit.**
 
 ### Poker Hand Evaluation
 
@@ -558,7 +558,7 @@ Run against Firebase Emulator (free, local).
 | Player identity | Anonymous Auth (invisible, no sign-up) | Enough for security rules, no UX overhead |
 | Refresh handling | Replay events from RTDB + re-derive crypto from localStorage seed | Full recovery, same device only |
 | Disconnect timeout | 60 seconds | Opponent sees countdown, then can claim win |
-| Turn timer | 60 seconds per turn | Committed by "End Turn" button, not on card placement |
+| Turn timer | 90 seconds per turn | Committed by "End Turn" button, not on card placement |
 | Timeout penalty | Auto-place + strike, 3 strikes = forfeit | Deterministic auto-place (lowest legal hand index) |
 | Scoring ties | 0 points for both | No half-points |
 | Post-game | Rematch in same room + running session score | Both must agree to rematch. Score persists across games. |
@@ -581,5 +581,5 @@ Run against Firebase Emulator (free, local).
 - **Firebase security rules:** exact rule definitions to be written during implementation, tested against emulator
 - **Card asset design:** whether to use SVG cards, emoji, or a card sprite sheet
 - **Room code format:** short alphanumeric (e.g., 6 chars) vs UUID — cosmetic but affects shareability
-- **Solo turn timer:** whether to keep the 60s timer in solo mode or make it optional
+- **Solo turn timer:** whether to keep the 90s timer in solo mode or make it optional
 - **AI difficulty levels:** v1 ships one difficulty; future versions could add harder AI that considers opponent hands and cross-hand strategy
