@@ -1,0 +1,34 @@
+import { describe, expect, test, vi, beforeEach, afterEach } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { DisconnectOverlay } from "./DisconnectOverlay";
+
+describe("DisconnectOverlay", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  test("renders nothing while the opponent is present", () => {
+    render(<DisconnectOverlay opponentPresent onClaimWin={vi.fn()} />);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  test("shows a countdown once the opponent disconnects, then a Claim win button", () => {
+    render(<DisconnectOverlay opponentPresent={false} onClaimWin={vi.fn()} />);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /claim win/i })).not.toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(screen.getByRole("button", { name: /claim win/i })).toBeInTheDocument();
+  });
+
+  test("clicking Claim win calls onClaimWin", () => {
+    const onClaimWin = vi.fn();
+    render(<DisconnectOverlay opponentPresent={false} onClaimWin={onClaimWin} />);
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    screen.getByRole("button", { name: /claim win/i }).click();
+    expect(onClaimWin).toHaveBeenCalledOnce();
+  });
+});

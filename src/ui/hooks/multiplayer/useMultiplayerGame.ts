@@ -5,7 +5,7 @@ import type { PlayerId } from "../../../engine/types";
 import { useGameEngine } from "../useGameEngine";
 import type { SoloGame } from "../useSoloGame";
 import type { MultiplayerCtx, SharedRefs } from "./context";
-import { placePending, replace, timeout } from "./myMoves";
+import { claimWin, placePending, replace, timeout } from "./myMoves";
 import { useOpeningDeal } from "./useOpeningDeal";
 import { useOpponentEvents } from "./useOpponentEvents";
 import { useProtocol } from "./useProtocol";
@@ -29,6 +29,8 @@ export type MultiplayerGame = Omit<SoloGame, "aiThinking"> & {
   aiThinking: false;
   /** True once any commit-reveal verification failed (Task 15 renders the screen). */
   hasViolation: boolean;
+  /** Forfeit the (disconnected) opponent; multiplayer-only, so not on SoloGame. */
+  claimWin: () => void;
 };
 
 /**
@@ -93,6 +95,7 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
     replace: (handIndex) => replace(ctx, handIndex),
     hasViolation: protocolHandle.violated,
     timeout: () => timeout(ctx),
+    claimWin: () => claimWin(ctx),
     // Stub for a later task (rematch).
     playAgain: () => {},
   };

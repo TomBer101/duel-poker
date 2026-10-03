@@ -22,7 +22,7 @@ const handle = {
 
 vi.mock("../hooks/useSoloGame", () => ({ useSoloGame: () => handle }));
 vi.mock("../hooks/multiplayer/useMultiplayerGame", () => ({
-  useMultiplayerGame: () => ({ ...handle, you: "p2", hasViolation: false }),
+  useMultiplayerGame: () => ({ ...handle, you: "p2", hasViolation: false, claimWin: vi.fn() }),
 }));
 
 vi.mock("../../app/firebaseContext", () => ({
@@ -32,6 +32,9 @@ vi.mock("../../app/firebaseContext", () => ({
 // Not under test here (route selection only); the real hook talks to
 // Firebase RTDB, which the fake `db: {}` above can't back. `vi.fn` (not a
 // plain arrow) so the single call's args can be inspected below.
+// No real Firebase presence listener under the fake `db: {}`.
+vi.mock("../../net/sync", () => ({ subscribeToPresence: vi.fn(() => () => {}) }));
+
 vi.mock("../hooks/useRemoteTimer", () => ({ useRemoteTimer: vi.fn(() => 90) }));
 
 describe("GameScreen route selection", () => {

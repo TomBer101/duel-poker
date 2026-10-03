@@ -19,6 +19,7 @@ const OWN_HIDDEN_TIMEOUT_RETRY_DELAY_MS = 300;
 type Queue = RefObject<GameEvent[]>;
 type Deadline = RefObject<{ drawIndex: number; at: number } | null>;
 type TimeoutEvent = Extract<GameEvent, { type: "TIMEOUT" | "TIMEOUT_HIDDEN" }>;
+type ForfeitEvent = Extract<GameEvent, { type: "FORFEIT" }>;
 type EndTurnEvent = Extract<GameEvent, { type: "END_TURN" }>;
 
 /**
@@ -51,8 +52,14 @@ export function useOpponentEvents(ctx: MultiplayerCtx): void {
         // opponent did, reporting on me — so it must NOT be treated as my own
         // echo. Every other event type still uses `event.by === you` as "I
         // sent this" (I only ever publish events about my own actions).
+        // FORFEIT is the same: `by` names the DISCONNECTED player, the claimer
+        // (sender) is the other seat. The claimer's echo has by !== you (ignored,
+        // already dispatched locally); a reconnecting forfeiter has by === you
+        // and must apply it.
         const isOwnEcho =
-          event.type === "TIMEOUT" || event.type === "TIMEOUT_HIDDEN" ? event.by !== you : event.by === you;
+          event.type === "TIMEOUT" || event.type === "TIMEOUT_HIDDEN" || event.type === "FORFEIT"
+            ? event.by !== you
+            : event.by === you;
         if (isOwnEcho) return;
         opponentEvents.current.push(event);
         bumpTick();
@@ -78,6 +85,8 @@ export function useOpponentEvents(ctx: MultiplayerCtx): void {
       handleOpponentTimeout(ctx, opponentEvents, ownHiddenTimeoutDeadline, event);
     } else if (event.type === "END_TURN") {
       handleOpponentEndTurn(ctx, opponentEvents, event);
+    } else if (event.type === "FORFEIT") {
+      handleOpponentForfeit(ctx, opponentEvents, event);
     } else {
       // Deliberate FIFO blocking: other opponent events (rematch, etc.) are
       // handled by later tasks. Until then they stall the queue, so say so
@@ -226,6 +235,17 @@ function handleOpponentTimeout(
   }
   opponentEvents.current.shift();
   dispatch(event);
+}
+
+/**
+ * Applies a FORFEIT the opponent claimed against me (I was disconnected).
+ * Self-contained and valid from any pre-result phase, so no readiness gate;
+ * if I'm already in "result" (reducer would throw) it is just dropped.
+ */
+function handleOpponentForfeit(ctx: MultiplayerCtx, opponentEvents: Queue, event: ForfeitEvent): void {
+  opponentEvents.current.shift();
+  if (ctx.state.phase === "result") return;
+  ctx.dispatch(event);
 }
 
 function handleOpponentEndTurn(ctx: MultiplayerCtx, opponentEvents: Queue, event: EndTurnEvent): void {

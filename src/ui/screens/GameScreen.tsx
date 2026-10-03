@@ -1,10 +1,13 @@
+import { useEffect, useState } from "react";
 import { DndContext, DragOverlay } from "@dnd-kit/core";
 import { useParams } from "react-router-dom";
 import { useFirebaseClient } from "../../app/firebaseContext";
 import { MAX_STRIKES, TURN_TIMEOUT_MS } from "../../engine/constants";
 import { otherPlayer } from "../../engine/deck";
+import { subscribeToPresence } from "../../net/sync";
 import { Board } from "../components/Board";
 import { Card } from "../components/Card";
+import { DisconnectOverlay } from "../components/DisconnectOverlay";
 import { DrawnCard } from "../components/DrawnCard";
 import { ResultOverlay } from "../components/ResultOverlay";
 import { RevealSequence } from "../components/RevealSequence";
@@ -35,6 +38,14 @@ export function GameScreen() {
   // when `roomId` is empty (`role` never resolves for an empty room id, and
   // every effect guards on `role`).
   const g = roomId ? multiplayer : solo;
+
+  const [opponentPresent, setOpponentPresent] = useState(true);
+  useEffect(() => {
+    if (!roomId) return;
+    return subscribeToPresence(client.db, roomId, (presence) => {
+      setOpponentPresent(presence[otherPlayer(readYou(roomId))] === true);
+    });
+  }, [roomId, client.db]);
   const { state } = g;
   const placing = state.phase === "placing";
   const pending = state.pendingCard;
@@ -112,6 +123,10 @@ export function GameScreen() {
 
         {state.phase === "result" && state.result && (
           <ResultOverlay result={state.result} you={g.you} onPlayAgain={g.playAgain} />
+        )}
+
+        {roomId && state.phase !== "result" && (
+          <DisconnectOverlay opponentPresent={opponentPresent} onClaimWin={multiplayer.claimWin} />
         )}
 
         <DragOverlay dropAnimation={null}>

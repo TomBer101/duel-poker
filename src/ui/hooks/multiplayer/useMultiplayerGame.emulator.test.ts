@@ -637,3 +637,56 @@ describe("useMultiplayerGame - timeout", () => {
     void p2; // kept mounted only so the deal/draw pipeline actually runs
   }, 15000);
 });
+
+describe("useMultiplayerGame - claimWin (FORFEIT)", () => {
+  async function startPlacing() {
+    await publishDealer(db, roomId, "p1");
+    const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
+    const p2 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p2", gameNumber: 1 }));
+    await waitFor(
+      () => {
+        // The initial state is already "placing"; drawCount >= 10 means DEAL landed.
+        expect(p1.result.current.state.drawCount).toBeGreaterThanOrEqual(10);
+        expect(p2.result.current.state.drawCount).toBeGreaterThanOrEqual(10);
+      },
+      { timeout: 5000 },
+    );
+    return { p1, p2 };
+  }
+
+  test("claimer and disconnected client both end in result, forfeitedBy the disconnected seat", async () => {
+    const { p1, p2 } = await startPlacing();
+
+    // p1 claims: p2 forfeits. p2's client sees event.by === "p2" === you and
+    // must APPLY it (it is not p2's own echo); p1's echo must be ignored.
+    act(() => p1.result.current.claimWin());
+
+    await waitFor(
+      () => {
+        expect(p1.result.current.state.phase).toBe("result");
+        expect(p2.result.current.state.phase).toBe("result");
+      },
+      { timeout: 8000 },
+    );
+    for (const c of [p1, p2]) {
+      expect(c.result.current.state.forfeitedBy).toBe("p2");
+      expect(c.result.current.state.result?.winner).toBe("p1");
+      expect(c.result.current.hasViolation).toBe(false);
+    }
+  }, 20000);
+
+  test("claimWin is a no-op once the game is in result", async () => {
+    const { p1, p2 } = await startPlacing();
+    act(() => p1.result.current.claimWin());
+    await waitFor(() => expect(p2.result.current.state.phase).toBe("result"), { timeout: 8000 });
+    await waitFor(() => expect(p1.result.current.state.phase).toBe("result"));
+
+    const before = p1.result.current.state;
+    act(() => p1.result.current.claimWin());
+    act(() => p2.result.current.claimWin()); // would forfeit p1 if not guarded
+    expect(p1.result.current.state).toBe(before);
+    expect(p2.result.current.state.forfeitedBy).toBe("p2");
+    expect(p1.result.current.hasViolation).toBe(false);
+    expect(p2.result.current.hasViolation).toBe(false);
+  }, 20000);
+});

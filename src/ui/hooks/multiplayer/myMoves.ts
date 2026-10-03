@@ -128,6 +128,28 @@ export function timeout(ctx: MultiplayerCtx): void {
 }
 
 /**
+ * Claims a win against a disconnected opponent: dispatches and publishes a
+ * FORFEIT naming the OPPONENT (the forfeiting player). Trusted as-is: presence
+ * is written by the opponent's own onDisconnect, not forgeable by the claimer.
+ * No-op before setup or once the game already has a result.
+ */
+export function claimWin(ctx: MultiplayerCtx): void {
+  const { db, roomId, you, role, state, dispatch, recordViolation } = ctx;
+  if (!role || state.phase === "result") return;
+  const event: GameEvent = { type: "FORFEIT", by: otherPlayer(you) };
+  try {
+    dispatch(event);
+  } catch (err) {
+    console.error("[useMultiplayerGame] local FORFEIT rejected by reducer", err);
+    recordViolation(`local FORFEIT failed: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+  publishEvent(db, roomId, event).catch((err: unknown) => {
+    console.error("[useMultiplayerGame] failed to publish FORFEIT", err);
+  });
+}
+
+/**
  * Places my resolved pending card and tells the opponent (never throws).
  * `legalHands` is the root's render-time value (same snapshot as `ctx.state`).
  */
