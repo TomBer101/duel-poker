@@ -11,9 +11,13 @@ const TICK_MS = 200;
  * of granting a fresh `durationMs`, and both clients agree on the deadline
  * even though their local clocks may differ slightly.
  *
- * `onExpire` is read through a ref (same reasoning as `useTimer`) and fires
- * at most once per `active` mount, guarded by `firedRef` — the subscription
- * can keep delivering the same (or a stale) `turnStartedAt` after expiry.
+ * The hook tracks one turn at a time, identified by `turnKey`. When `turnKey`
+ * changes (or `active` flips) the current timestamp is remembered as `stale`,
+ * `startedAt` and the fired latch are cleared, and any delivered value equal
+ * to `stale` is ignored: the new turn's timestamp may arrive later than the
+ * local turn change, and Firebase re-delivers the current (old) value on
+ * every re-subscribe. `onExpire` therefore fires at most once per turn.
+ * It is read through a ref (same reasoning as `useTimer`).
  */
 export function useRemoteTimer(
   db: Database,
@@ -34,7 +38,15 @@ export function useRemoteTimer(
 
   // Declared before the subscription effect so a reset always runs first
   // within a commit.
+  // Only a real change counts: a StrictMode re-run has identical props and
+  // must not discard a value the subscription already delivered.
+  // Accepted narrow case: if a turn is skipped before its value arrives, that
+  // late value can be taken as the next turn's start.
+  const prev = useRef<string | null>(null);
   useEffect(() => {
+    const sig = `${active}|${turnKey}`;
+    if (prev.current === sig) return;
+    prev.current = sig;
     stale.current = startedAt.current ?? stale.current;
     startedAt.current = null;
     firedRef.current = false;

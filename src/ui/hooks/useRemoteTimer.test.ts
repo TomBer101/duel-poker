@@ -1,15 +1,18 @@
+import { StrictMode } from "react";
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, test, vi, beforeEach, afterEach } from "vitest";
 import { useRemoteTimer } from "./useRemoteTimer";
 
 // Captures the subscriber so each test delivers turn timestamps LATER, like
 // Firebase does (a synchronous mock hid the stale-timestamp bugs).
+let syncValue: number | null = null;
 let deliver: (at: number) => void = () => {};
 let subscribeCount = 0;
 vi.mock("../../net/roomState", () => ({
   subscribeToTurnStarted: (_db: unknown, _roomId: string, cb: (at: number) => void) => {
     subscribeCount++;
     deliver = cb;
+    if (syncValue !== null) cb(syncValue);
     return () => {};
   },
 }));
@@ -30,6 +33,7 @@ describe("useRemoteTimer", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     subscribeCount = 0;
+    syncValue = null;
   });
   afterEach(() => vi.useRealTimers());
 
@@ -99,6 +103,18 @@ describe("useRemoteTimer", () => {
     expect(onExpire).not.toHaveBeenCalled();
     act(() => deliver(Date.now())); // the new turn's value
     advance(D + 500);
+    expect(onExpire).toHaveBeenCalledTimes(1);
+  });
+
+  test("StrictMode double-run with a synchronously delivered value still counts down and fires", () => {
+    const onExpire = vi.fn();
+    syncValue = Date.now() - 4_000;
+    const { result } = renderHook(() => useRemoteTimer(DB, "room", true, D, onExpire, "placing:p1"), {
+      wrapper: StrictMode,
+    });
+    advance(200);
+    expect(result.current).toBeLessThanOrEqual(6);
+    advance(D);
     expect(onExpire).toHaveBeenCalledTimes(1);
   });
 
