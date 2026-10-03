@@ -21,7 +21,7 @@ const handle = {
 };
 
 vi.mock("../hooks/useSoloGame", () => ({ useSoloGame: () => handle }));
-vi.mock("../hooks/useMultiplayerGame", () => ({
+vi.mock("../hooks/multiplayer/useMultiplayerGame", () => ({
   useMultiplayerGame: () => ({ ...handle, you: "p2", hasViolation: false }),
 }));
 

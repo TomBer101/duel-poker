@@ -10,7 +10,7 @@ import { ResultOverlay } from "../components/ResultOverlay";
 import { RevealSequence } from "../components/RevealSequence";
 import { StrikeIndicator } from "../components/StrikeIndicator";
 import { useDragPlacement } from "../hooks/useDragPlacement";
-import { useMultiplayerGame } from "../hooks/useMultiplayerGame";
+import { useMultiplayerGame } from "../hooks/multiplayer/useMultiplayerGame";
 import { useRemoteTimer } from "../hooks/useRemoteTimer";
 import { useSoloGame } from "../hooks/useSoloGame";
 import { useTimer } from "../hooks/useTimer";

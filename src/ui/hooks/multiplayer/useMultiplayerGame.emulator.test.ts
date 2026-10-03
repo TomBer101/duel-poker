@@ -1,19 +1,19 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, test, beforeEach, afterEach, vi } from "vitest";
-import { connectToEmulators, createFirebaseClient, signInAnonymous } from "../../net/firebase";
-import { loadSeed } from "../../crypto/seedStorage";
-import { publishDealer } from "../../net/roomState";
+import { connectToEmulators, createFirebaseClient, signInAnonymous } from "../../../net/firebase";
+import { loadSeed } from "../../../crypto/seedStorage";
+import { publishDealer } from "../../../net/roomState";
 import { useMultiplayerGame } from "./useMultiplayerGame";
 import { get, ref, type Database } from "firebase/database";
-import type { PlayerId } from "../../engine/types";
-import { publishReveal, type ProtocolReveal } from "../../net/sync";
+import type { PlayerId } from "../../../engine/types";
+import { publishReveal, type ProtocolReveal } from "../../../net/sync";
 
 // The DEAL event schedules 10 staggered `card-place` sfx via real setTimeouts
 // (see ui/sound/gameSounds.ts). jsdom doesn't implement HTMLMediaElement.play,
 // so those timers firing after the test completes throw uncaught exceptions.
 // Sound is irrelevant to this hook's protocol logic, so it's mocked out here
 // rather than in production code.
-vi.mock("../sound/gameSounds", () => ({
+vi.mock("../../sound/gameSounds", () => ({
   playEventSfx: () => {},
   playResultSting: () => {},
 }));
@@ -28,8 +28,8 @@ vi.mock("../sound/gameSounds", () => ({
 type PositionRevealControl = { roomId: string; drawIndex: number; mode: "block" | { delayMs: number } } | null;
 let positionRevealControl: PositionRevealControl = null;
 
-vi.mock("../../net/sync", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../net/sync")>();
+vi.mock("../../../net/sync", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../net/sync")>();
   return {
     ...actual,
     publishReveal: (db: Database, roomId: string, reveal: ProtocolReveal) => {
