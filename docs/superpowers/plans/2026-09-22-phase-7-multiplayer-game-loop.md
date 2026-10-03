@@ -2408,6 +2408,8 @@ src/ui/hooks/multiplayer/
 
 ### Task 11: Disconnect overlay
 
+> **FILE LOCATIONS CHANGED (Task 10d, 2026-10-03).** `src/ui/hooks/useMultiplayerGame.ts` no longer exists. Read `src/ui/hooks/multiplayer/` first (root `useMultiplayerGame.ts` ~99 lines + `context.ts`, `useProtocol`, `useShuffle`, `useOpeningDeal`, `useOpponentEvents`, `useTurnDraws`, `useRevealPhase`, `myMoves.ts`). Wherever this task says "`useMultiplayerGame.ts`", map as follows: `claimWin` is a plain function in `myMoves.ts` (like `timeout`), exposed by the root handle and added to the `MultiplayerGame` type in the root file; the incoming-FORFEIT intake is a new branch in the thin dispatcher in `useOpponentEvents.ts`, handled by a small NAMED handler (`handleOpponentForfeit`), NOT inlined into the dispatcher. The emulator test lives in `multiplayer/useMultiplayerGame.emulator.test.ts`. Add a hook-level emulator test for claimWin: one client calls it, both clients end in `result` with `forfeitedBy` the disconnected player and the winner the claimer. Turn timer is now 90s (`TURN_TIMEOUT_MS`); the DISCONNECT countdown in this task stays 60s. Stage explicit paths only; never touch the developer-owned `src/ui/hooks/useTimer.ts` or `docs/chinese-poker-implementation-plan.md`. Commit messages go via `git commit -F` with a POSIX scratchpad path (see earlier dispatches).
+
 **Files:**
 - Create: `src/ui/components/DisconnectOverlay.tsx`, `DisconnectOverlay.module.css`
 - Test: `src/ui/components/DisconnectOverlay.test.tsx`
