@@ -2344,6 +2344,68 @@ git commit -m "feat(engine): FORFEIT event for an immediate, one-shot forfeit (d
 
 ---
 
+### Task 10c: One turn-aware timer, 90-second turns
+
+**Why:** (1) The developer wants 90s turns (`TURN_TIMEOUT_MS`), and a timer that starts when the turn starts, not when the card is drawn. (2) Task 9 used two `useRemoteTimer` instances as a workaround. Experiments proved two defects in the hook: with ONE instance its "already fired" latch never resets, so timeouts stop working after the first turn (the reason for the workaround); and when an instance is re-activated it reuses the PREVIOUS turn's timestamp until the new one arrives, so it can fire an immediate false timeout (the workaround's own bug). The fix is to make the hook turn-aware.
+
+**Files:**
+- Modify: `src/engine/constants.ts` (`TURN_TIMEOUT_MS = 90_000`)
+- Modify: `src/ui/hooks/useRemoteTimer.ts` and `useRemoteTimer.test.ts`
+- Modify: `src/ui/screens/GameScreen.tsx` and `GameScreen.test.tsx`
+- Modify docs: `docs/chinese-poker-spec-v2.md` lines mentioning the 60s TURN timer (about lines 112, 561, 584) to 90s. Leave the 60s DISCONNECT timeout alone.
+- Do NOT touch `src/ui/hooks/useTimer.ts` (it carries a developer TODO comment; the developer edits it themselves) and do NOT stage `docs/chinese-poker-implementation-plan.md` (developer edit). Stage only the explicit paths you changed.
+
+**Contract for `useRemoteTimer(db, roomId, active, durationMs, onExpire, turnKey): number`** (`turnKey: string`, new last parameter):
+- The hook tracks one turn at a time, identified by `turnKey`. When `turnKey` changes (or `active` flips false): remember the current timestamp as `stale`, set `startedAt = null`, and clear the fired latch.
+- The Firebase callback ignores a value equal to `stale`, and accepts the first different value as the new turn's start. Until then the countdown shows the full duration and `onExpire` cannot fire.
+- `onExpire` fires at most once per turn (per `turnKey`), never on a timestamp belonging to a previous turn, including the gap between a turn changing locally and its new timestamp arriving.
+- Required tests (fake timers, mock `subscribeToTurnStarted` so the value is delivered LATER by calling the captured callback): (A) re-activation / new turn does not fire on the previous turn's stale timestamp; (B) one instance that stays active fires once on turn 1 and again on turn 2; (C) the old timestamp expiring during the gap after `turnKey` changes does not fire for the new turn; (D) first-ever activation (no stale value) works; (E) countdown shows remaining time, not the full duration, once a timestamp arrives.
+
+**GameScreen:** replace the two multiplayer `useRemoteTimer` calls with ONE: `active = !!roomId && g.state.phase === "placing"`, `turnKey = g.state.phase + ":" + g.state.turn`, `onExpire = g.timeout` (it no-ops on my own turn by design; it reports the opponent's timeout on theirs). Display the returned seconds only when `g.isHumanTurn` and phase is placing (no `pendingCard` requirement in multiplayer). Solo keeps `useTimer` exactly as is. Update `GameScreen.test.tsx` to assert the single call's args (active flag, turnKey value, onExpire is `handle.timeout`).
+
+- [ ] Step 1: write failing tests. Step 2: confirm failure. Step 3: implement. Step 4: `pnpm test`, `pnpm exec tsc -b`, `pnpm lint` all green (some existing tests may hardcode 60 seconds for the TURN timer; update those expectations to 90 and mention it in your report). Step 5: commit with explicit paths.
+
+---
+
+### Task 10d: Split `useMultiplayerGame` into a folder of focused hooks
+
+**Why:** `src/ui/hooks/useMultiplayerGame.ts` is ~900 lines with one ~200-line effect. The developer wants it split into several files/hooks composed by a thin root, while the async behavior stays exactly the same. This is a PURE MOVE: no behavior change.
+
+**Target layout:**
+```
+src/crypto/drawSchedule.ts (+ drawSchedule.test.ts)   pure: DEAL_SLOTS, placingTurnOwner, isFaceDownDraw, replaceDrawIndex, validReplaceHand
+src/ui/hooks/multiplayer/
+  useMultiplayerGame.ts    root: builds ctx, calls the hooks below in order, returns the MultiplayerGame handle (+ exports MultiplayerGame / MultiplayerGameOptions types)
+  context.ts               the MultiplayerCtx type + the shared-ref bundle type
+  useProtocol.ts           protocol ref, protocolQueue, protocolTick, violated, updateProtocol, recordViolation, warnOnce
+  useShuffle.ts            dealer subscription, seed + commitments, commitments subscription, both selector position-reveal effects, reveals subscription (+ answerWithCard)
+  useOpeningDeal.ts        the DEAL-assembly effect
+  useOpponentEvents.ts     events subscription, the queue, and the intake effect reduced to a thin dispatcher calling NAMED handlers: handleOpponentEndTurn, handleOpponentReplace, handleOpponentTimeout (the TIMEOUT / TIMEOUT_HIDDEN logic incl. the bounded own-hidden-timeout wait), plus the "unhandled type" warn-once fallback
+  useTurnDraws.ts         the per-turn DRAW / REPLACE_DRAW resolve effect
+  useRevealPhase.ts        the three reveal-phase effects (publish batch, verify, dispatch REVEAL_FACE_DOWN)
+  myMoves.ts               placePending, replace, timeout, commitOwnFaceDownCard as plain functions taking ctx (no effects)
+  useMultiplayerGame.emulator.test.ts   moved here from hooks/, only its import / vi.mock paths change
+```
+`src/ui/hooks/useMultiplayerGame.ts` must no longer exist; update every importer (`GameScreen.tsx`, `GameScreen.test.tsx` mocks, anything else found by grep).
+
+**Async-safety rules (the point of this task; the two-client emulator tests are the safety net):**
+1. Preserve the ORIGINAL RELATIVE ORDER in which the effects run within a commit. Original order: dealer subscription, seed/commitments publish, commitments subscription, selector opening positions, selector per-turn positions, reveals subscription, DEAL assembly, events subscription, intake, per-turn DRAW resolve, batch publish, batch verify, REVEAL_FACE_DOWN. Call the sub-hooks in an order that keeps that sequence (the layout above does: useProtocol, useShuffle, useOpeningDeal, useOpponentEvents, useTurnDraws, useRevealPhase).
+2. Keep every effect's dependency array EXACTLY as it is (including the deliberately dependency-less ones and their explanatory comments; they re-check after every render because they read refs).
+3. `updateProtocol` / `protocolQueue` / `protocolTick` semantics unchanged: ONE promise chain, steps read `protocol.current` only when they run, a rejection is recorded as a violation and never breaks the chain, `bumpTick` after every step.
+4. Each mutable ref has exactly ONE owner and is shared by passing it (via `ctx`), never duplicated. Refs that cross modules: protocol handle (useProtocol), dealerState / selectorState (useShuffle), the placement-salt and slot-draw maps and the in-flight guards (`placedForDraw`, `replacedForDraw`, `timedOutForDraw`, `timedOutOwnHiddenForDraw`), created once in the root and passed through ctx.
+5. `ctx` is rebuilt each render with the latest `state`; functions that read `state` (placePending, replace, timeout, the handlers) must still read the render's snapshot exactly as today.
+6. Hooks are called unconditionally in a fixed order every render.
+
+**Other requirements:** the pure helpers move to `crypto/drawSchedule.ts` with NEW table-driven unit tests (for both players over draw indices 0..51: exactly 5 face-down placing draws each, at indices 40,42,44,46,48 for p1 and 41,43,45,47,49 for p2; none outside 10..49; placingTurnOwner alternates starting with p1; replaceDrawIndex is 50 for p1 and 51 for p2; DEAL_SLOTS maps 0->p1 hand0, 1->p2 hand0 ... 9->p2 hand4; validReplaceHand cases incl. null / undefined / out-of-range / non-integer). No barrel file. No new behavior, no renames of exported types. Keep lint at 0 errors and no more than the existing 2 exhaustive-deps warnings.
+
+**Verification (all required, with output in the report):** `pnpm test:emulator:ui` three consecutive times with the unchanged assertions; `pnpm test`; `pnpm test:emulator`; `pnpm exec tsc -b`; `pnpm lint`.
+
+**Downstream map for Tasks 11-15** (where code lands after this split): claimWin -> `myMoves.ts`; FORFEIT / REMATCH intake -> `useOpponentEvents.ts`; rematch / score / recovery effects -> new `use*.ts` files in `multiplayer/`, called from the root; violation flag stays on the root handle.
+
+- [ ] Commit in at most two commits with explicit paths (suggested: "refactor(crypto): extract draw schedule helpers with tests" then "refactor(ui): split useMultiplayerGame into focused hooks").
+
+---
+
 ### Task 11: Disconnect overlay
 
 **Files:**
