@@ -39,13 +39,14 @@ export function GameScreen() {
   // every effect guards on `role`).
   const g = roomId ? multiplayer : solo;
 
+  const you = multiplayer.you;
   const [opponentPresent, setOpponentPresent] = useState(true);
   useEffect(() => {
     if (!roomId) return;
     return subscribeToPresence(client.db, roomId, (presence) => {
-      setOpponentPresent(presence[otherPlayer(readYou(roomId))] === true);
+      setOpponentPresent(presence[otherPlayer(you)] === true);
     });
-  }, [roomId, client.db]);
+  }, [roomId, client.db, you]);
   const { state } = g;
   const placing = state.phase === "placing";
   const pending = state.pendingCard;

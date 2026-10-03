@@ -8,6 +8,10 @@ export type DisconnectOverlayProps = {
   onClaimWin: () => void;
 };
 
+function formatClock(seconds: number): string {
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
 export function DisconnectOverlay({ opponentPresent, onClaimWin }: DisconnectOverlayProps) {
   const secondsLeft = useTimer(!opponentPresent, DISCONNECT_TIMEOUT_MS, () => {});
   if (opponentPresent) return null;
@@ -23,7 +27,7 @@ export function DisconnectOverlay({ opponentPresent, onClaimWin }: DisconnectOve
           </button>
         </>
       ) : (
-        <p className={styles.message}>Opponent reconnecting… 0:{String(secondsLeft).padStart(2, "0")}</p>
+        <p className={styles.message}>Opponent reconnecting… {formatClock(secondsLeft)}</p>
       )}
     </div>
   );

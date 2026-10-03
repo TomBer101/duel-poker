@@ -23,6 +23,20 @@ type ForfeitEvent = Extract<GameEvent, { type: "FORFEIT" }>;
 type EndTurnEvent = Extract<GameEvent, { type: "END_TURN" }>;
 
 /**
+ * True when `event` (which has a `by`) is my own write echoed back by the
+ * subscription. Inverted for TIMEOUT/TIMEOUT_HIDDEN/FORFEIT: per spec only the
+ * NON-active player writes them, so `event.by` names the timed-out /
+ * disconnected player, not the sender. On that player's own client
+ * `event.by === you` yet the opponent wrote it, so it must be applied; the
+ * sender's echo has `event.by !== you`. Every other type is `event.by === you`.
+ */
+export function isOwnEcho(event: GameEvent & { by: PlayerId }, you: PlayerId): boolean {
+  return event.type === "TIMEOUT" || event.type === "TIMEOUT_HIDDEN" || event.type === "FORFEIT"
+    ? event.by !== you
+    : event.by === you;
+}
+
+/**
  * Opponent event intake: the Firebase subscription feeding a FIFO queue, and
  * the effect that applies (shift + dispatch), waits on (leave queued), or
  * rejects (shift + violation) the head of that queue.
@@ -45,22 +59,7 @@ export function useOpponentEvents(ctx: MultiplayerCtx): void {
     () =>
       subscribeToEvents(db, roomId, (event) => {
         if (!("by" in event)) return;
-        // Self-echo detection is inverted for TIMEOUT/TIMEOUT_HIDDEN: per spec
-        // only the NON-active player writes them, so `event.by` names the
-        // TIMED-OUT (active) player, not the sender. On the timed-out player's
-        // own client `event.by === you`, yet that client never wrote it — the
-        // opponent did, reporting on me — so it must NOT be treated as my own
-        // echo. Every other event type still uses `event.by === you` as "I
-        // sent this" (I only ever publish events about my own actions).
-        // FORFEIT is the same: `by` names the DISCONNECTED player, the claimer
-        // (sender) is the other seat. The claimer's echo has by !== you (ignored,
-        // already dispatched locally); a reconnecting forfeiter has by === you
-        // and must apply it.
-        const isOwnEcho =
-          event.type === "TIMEOUT" || event.type === "TIMEOUT_HIDDEN" || event.type === "FORFEIT"
-            ? event.by !== you
-            : event.by === you;
-        if (isOwnEcho) return;
+        if (isOwnEcho(event, you)) return;
         opponentEvents.current.push(event);
         bumpTick();
       }),

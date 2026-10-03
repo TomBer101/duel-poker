@@ -31,4 +31,13 @@ describe("DisconnectOverlay", () => {
     screen.getByRole("button", { name: /claim win/i }).click();
     expect(onClaimWin).toHaveBeenCalledOnce();
   });
+
+  test("formats the countdown as m:ss", () => {
+    render(<DisconnectOverlay opponentPresent={false} onClaimWin={vi.fn()} />);
+    expect(screen.getByText(/1:00/)).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(13_000);
+    });
+    expect(screen.getByText(/0:47/)).toBeInTheDocument();
+  });
 });
