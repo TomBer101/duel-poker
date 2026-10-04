@@ -15,6 +15,7 @@ import { RevealSequence } from "../components/RevealSequence";
 import { StrikeIndicator } from "../components/StrikeIndicator";
 import { useDragPlacement } from "../hooks/useDragPlacement";
 import { useMultiplayerGame } from "../hooks/multiplayer/useMultiplayerGame";
+import { useSessionScore } from "../hooks/multiplayer/useSessionScore";
 import { useRemoteTimer } from "../hooks/useRemoteTimer";
 import { useSoloGame } from "../hooks/useSoloGame";
 import { useTimer } from "../hooks/useTimer";
@@ -72,6 +73,7 @@ function GameScreenBody({ roomId, gameNumber = 1 }: GameScreenBodyProps) {
     });
   }, [roomId, client.db, you]);
   const { state } = g;
+  const sessionScore = useSessionScore(client.db, roomId, you, gameNumber, state);
   const placing = state.phase === "placing";
   const pending = state.pendingCard;
 
@@ -152,6 +154,7 @@ function GameScreenBody({ roomId, gameNumber = 1 }: GameScreenBodyProps) {
             you={g.you}
             onPlayAgain={g.playAgain}
             rematchRequested={roomId ? multiplayer.rematchRequested : false}
+            sessionScore={sessionScore}
           />
         )}
 

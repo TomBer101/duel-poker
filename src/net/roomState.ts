@@ -48,13 +48,23 @@ export function subscribeToRematch(
   });
 }
 
-/** Reads/increments under a transaction-free "read then write" — good enough
- *  for this game's low write contention (one increment per game, on the
- *  client that just computed the result). */
-export async function incrementScore(db: Database, roomId: string, winner: PlayerId): Promise<void> {
-  const snapshot = await get(ref(db, `rooms/${roomId}/score/${winner}`));
+/**
+ * Bumps MY OWN seat's session score and stamps `scoredGame` in ONE update (the
+ * security rules require both together and allow it once per game number).
+ * Read-then-write is fine: only the winner's client writes, once per game.
+ */
+export async function incrementScore(
+  db: Database,
+  roomId: string,
+  player: PlayerId,
+  gameNumber: number,
+): Promise<void> {
+  const snapshot = await get(ref(db, `rooms/${roomId}/score/${player}`));
   const current = (snapshot.val() as number | null) ?? 0;
-  await set(ref(db, `rooms/${roomId}/score/${winner}`), current + 1);
+  await update(ref(db, `rooms/${roomId}`), {
+    [`score/${player}`]: current + 1,
+    scoredGame: gameNumber,
+  });
 }
 
 export function subscribeToScore(

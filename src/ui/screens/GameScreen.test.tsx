@@ -42,6 +42,8 @@ vi.mock("../hooks/multiplayer/useMultiplayerGame", () => ({
 }));
 
 vi.mock("../../net/roomState", () => ({
+  subscribeToScore: () => () => {},
+  incrementScore: vi.fn(() => Promise.resolve()),
   subscribeToGameNumber: (_db: unknown, _room: string, cb: (n: number) => void) => {
     gn.deliver = cb;
     cb(1);

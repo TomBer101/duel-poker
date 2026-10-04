@@ -36,6 +36,13 @@
   color: #c8d0dc;
 }
 
+.sessionScore {
+  margin: 0;
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  color: #9aa6b8;
+}
+
 .matchups {
   display: flex;
   flex-direction: column;

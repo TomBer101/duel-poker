@@ -69,10 +69,11 @@ test("publishRematchVote / subscribeToRematch", async () => {
 test("incrementScore / subscribeToScore accumulates per player", async () => {
   const seen: Record<string, number>[] = [];
   const unsubscribe = subscribeToScore(db, roomId, (s) => seen.push(s));
-  await incrementScore(db, roomId, "p1");
-  await incrementScore(db, roomId, "p1");
-  await incrementScore(db, roomId, "p2");
+  await incrementScore(db, roomId, "p1", 1);
+  await incrementScore(db, roomId, "p1", 2);
+  await incrementScore(db, roomId, "p2", 3);
   await vi.waitFor(() => expect(seen.at(-1)).toEqual({ p1: 2, p2: 1 }));
+  expect((await get(ref(db, `rooms/${roomId}/scoredGame`))).val()).toBe(3);
   unsubscribe();
 });
 

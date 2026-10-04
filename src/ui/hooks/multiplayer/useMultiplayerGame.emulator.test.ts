@@ -3,7 +3,7 @@ import { act, render, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, test, afterAll, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import { connectToEmulators, createFirebaseClient, signInAnonymous } from "../../../net/firebase";
 import { loadSeed } from "../../../crypto/seedStorage";
-import { publishRematchVote, resetForRematch, subscribeToGameNumber } from "../../../net/roomState";
+import { incrementScore, publishRematchVote, resetForRematch, subscribeToGameNumber, subscribeToScore } from "../../../net/roomState";
 import { createRoom, joinRoom } from "../../../net/room";
 import { useMultiplayerGame } from "./useMultiplayerGame";
 import { get, goOffline, goOnline, ref, type Database } from "firebase/database";
@@ -935,4 +935,34 @@ describe("useMultiplayerGame - rematch (real rules, two clients)", () => {
     expect(n1.result.current.hasViolation).toBe(false);
     expect(n2.result.current.hasViolation).toBe(false);
   }, 60000);
+  test("session score under the real rules: once per game, again after a real rematch, both clients observe it", async () => {
+    await dealtBy("p1");
+    const seen1: Record<string, number>[] = [];
+    const seen2: Record<string, number>[] = [];
+    const un1 = subscribeToScore(db, roomId, (s) => seen1.push(s));
+    const un2 = subscribeToScore(db2, roomId, (s) => seen2.push(s));
+
+    // Game 1 winner (p1) increments its own seat.
+    await incrementScore(db, roomId, "p1", 1);
+    await waitFor(() => {
+      expect(seen1.at(-1)).toEqual({ p1: 1, p2: 0 });
+      expect(seen2.at(-1)).toEqual({ p1: 1, p2: 0 });
+    });
+    // A second call in the same game is rejected by the rules; score stays 1.
+    await expect(incrementScore(db, roomId, "p1", 1)).rejects.toThrow(/permission.denied/i);
+    expect(await read(db, "score/p1")).toBe(1);
+
+    // A real rematch (votes + reset) bumps gameNumber; game 2's winner (p1 again) scores.
+    await publishRematchVote(db, roomId, "p1");
+    await publishRematchVote(db2, roomId, "p2");
+    await resetForRematch(db, roomId, "p2", 2);
+    await incrementScore(db, roomId, "p1", 2);
+    await waitFor(() => {
+      expect(seen1.at(-1)).toEqual({ p1: 2, p2: 0 });
+      expect(seen2.at(-1)).toEqual({ p1: 2, p2: 0 });
+    });
+    expect(await read(db, "scoredGame")).toBe(2);
+    un1();
+    un2();
+  }, 30000);
 });

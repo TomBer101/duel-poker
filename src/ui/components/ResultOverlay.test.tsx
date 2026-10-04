@@ -58,4 +58,14 @@ describe("ResultOverlay", () => {
     expect(onPlayAgain).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("link", { name: "Home" })).toHaveAttribute("href", "/");
   });
+
+  it("shows the session score only when provided (multiplayer)", () => {
+    const { unmount } = renderIn(
+      <ResultOverlay result={result} you="p1" onPlayAgain={vi.fn()} sessionScore={{ you: 3, opponent: 1 }} />,
+    );
+    expect(screen.getByText("Session: 3 – 1")).toBeInTheDocument();
+    unmount();
+    renderIn(<ResultOverlay result={result} you="p1" onPlayAgain={vi.fn()} />);
+    expect(screen.queryByText(/Session/)).toBeNull();
+  });
 });
