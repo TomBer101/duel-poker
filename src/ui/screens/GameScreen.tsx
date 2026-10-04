@@ -33,11 +33,13 @@ function readYou(roomId: string): "p1" | "p2" {
 export function GameScreen() {
   const { roomId } = useParams();
   const { client } = useFirebaseClient();
-  const [gameNumber, setGameNumber] = useState<number | null>(null);
+  // Tagged with its room so a number is never used for a different room.
+  const [seen, setSeen] = useState<{ roomId: string; n: number } | null>(null);
   useEffect(() => {
     if (!roomId) return;
-    return subscribeToGameNumber(client.db, roomId, setGameNumber);
+    return subscribeToGameNumber(client.db, roomId, (n) => setSeen({ roomId, n }));
   }, [roomId, client.db]);
+  const gameNumber = seen && seen.roomId === roomId ? seen.n : null;
 
   if (!roomId) return <GameScreenBody key="solo" />;
   if (gameNumber === null) return null;

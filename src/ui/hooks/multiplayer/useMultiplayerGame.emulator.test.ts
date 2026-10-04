@@ -890,4 +890,49 @@ describe("useMultiplayerGame - rematch (real rules, two clients)", () => {
     expect(p1.handle?.hasViolation).toBe(false);
     expect(p2.handle?.hasViolation).toBe(false);
   }, 60000);
+
+  test("a STALE game-1 instance publishes nothing after the reset (no commitments under the flipped role)", async () => {
+    await dealtBy("p1");
+    // Plain, never-remounted hooks: exactly what a stale instance looks like.
+    const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
+    const p2 = renderHook(() => useMultiplayerGame({ db: db2, roomId, you: "p2", gameNumber: 1 }));
+    await waitFor(
+      () => {
+        expect(p1.result.current.state.drawCount).toBeGreaterThanOrEqual(10);
+        expect(p2.result.current.state.drawCount).toBeGreaterThanOrEqual(10);
+      },
+      { timeout: 5000 },
+    );
+    const game1Dealer = await read(db, "protocol/commitments/dealer");
+    await dropConnection(db2, "p2");
+    act(() => p1.result.current.claimWin());
+    await waitFor(() => expect(p2.result.current.state.phase).toBe("result"), { timeout: 8000 });
+    act(() => p1.result.current.playAgain());
+    act(() => p2.result.current.playAgain());
+    await waitFor(async () => expect(await read(db, "gameNumber")).toBe(2), { timeout: 8000 });
+
+    // The old instances saw the flipped dealer; they must not have re-published.
+    expect(await read(db, "protocol/commitments")).toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(await read(db, "protocol/commitments")).toBeNull();
+    p1.unmount();
+    p2.unmount();
+
+    // Only the new mount's commitments land (random salts make them
+    // unrecomputable, so: absent until the new mount, present and new after).
+    const n1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 2 }));
+    const n2 = renderHook(() => useMultiplayerGame({ db: db2, roomId, you: "p2", gameNumber: 2 }));
+    await waitFor(
+      () => {
+        expect(n1.result.current.state.drawCount).toBeGreaterThanOrEqual(10);
+        expect(n2.result.current.state.drawCount).toBeGreaterThanOrEqual(10);
+      },
+      { timeout: 8000 },
+    );
+    const game2Dealer = await read(db, "protocol/commitments/dealer");
+    expect(game2Dealer).toHaveLength(52);
+    expect(game2Dealer).not.toEqual(game1Dealer);
+    expect(n1.result.current.hasViolation).toBe(false);
+    expect(n2.result.current.hasViolation).toBe(false);
+  }, 60000);
 });

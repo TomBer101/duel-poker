@@ -39,9 +39,12 @@ export function useShuffle(ctx: ShuffleInput): ShuffleHandle {
   const publishedPosition = useRef<Set<number>>(new Set());
   const publishedCard = useRef<Set<number>>(new Set());
 
-  // Who's dealer this game — read once at mount (set by the room creator /
-  // rematch flow before either client mounts this hook).
-  useEffect(() => subscribeToDealer(db, roomId, setDealer), [db, roomId]);
+  // Who's dealer this game: latched on first delivery. Every game is a fresh
+  // mount (GameScreen keys the body by gameNumber), so the dealer is constant
+  // within a mount. Latching keeps a STALE instance from re-deriving its role
+  // when a rematch reset flips protocol/dealer and republishing its old-seed
+  // (write-once) commitments over the new game's.
+  useEffect(() => subscribeToDealer(db, roomId, (d) => setDealer((cur) => cur ?? d)), [db, roomId]);
 
   // Generate my half of the shuffle and publish my 52 commitments.
   useEffect(() => {

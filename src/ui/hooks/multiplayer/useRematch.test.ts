@@ -56,6 +56,17 @@ describe("useRematch", () => {
     expect(h.resetForRematch).toHaveBeenCalledTimes(1);
   });
 
+  test("dealer unknown: no reset until it arrives, then exactly one", () => {
+    let dealer: PlayerId | null = null;
+    const { rerender } = renderHook(() => useRematch(makeCtx({ dealer })));
+    act(() => h.deliver!({ p1: true, p2: true }));
+    expect(h.resetForRematch).not.toHaveBeenCalled();
+    dealer = "p2";
+    rerender();
+    expect(h.resetForRematch).toHaveBeenCalledTimes(1);
+    expect(h.resetForRematch).toHaveBeenCalledWith({}, "R", "p1", 2);
+  });
+
   test("p2 never resets, and its own vote is rematchRequested", () => {
     const { result } = renderHook(() => useRematch(makeCtx({ you: "p2", dealer: "p1" })));
     act(() => h.deliver!({ p2: true }));
@@ -83,6 +94,14 @@ describe("useRematch", () => {
 });
 
 describe("playAgain", () => {
+  test("a previous mount's stale handle cannot vote again after the reset", () => {
+    const ctx = makeCtx();
+    playAgain(ctx); // game 1 vote
+    h.publishRematchVote.mockClear();
+    playAgain(ctx); // stale click on the old handle after the room moved on
+    expect(h.publishRematchVote).not.toHaveBeenCalled();
+  });
+
   test("is a no-op before the result phase", () => {
     const ctx = makeCtx({ state: { phase: "placing" } as MultiplayerCtx["state"] });
     playAgain(ctx);
