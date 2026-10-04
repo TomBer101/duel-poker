@@ -34,6 +34,30 @@ export function generateSalt(): Uint8Array {
   return crypto.getRandomValues(new Uint8Array(SALT_BYTES));
 }
 
+/**
+ * Deterministic salt: first SALT_BYTES of SHA-256(seed || u8 tag.length || tag
+ * || u32be field_0 || u32be field_1 ...). The length-prefixed tag and fixed-width
+ * fields make the encoding injective for a given seed and field count, so
+ * distinct (tag, fields) inputs never share a preimage. Salt secrecy == seed
+ * secrecy (the same root that protects the deck order).
+ */
+export async function deriveSalt(
+  seed: Uint8Array,
+  tag: string,
+  ...fields: number[]
+): Promise<Uint8Array> {
+  const tagBytes = new TextEncoder().encode(tag);
+  const payload = new Uint8Array(seed.length + 1 + tagBytes.length + fields.length * 4);
+  payload.set(seed, 0);
+  payload[seed.length] = tagBytes.length;
+  payload.set(tagBytes, seed.length + 1);
+  const view = new DataView(payload.buffer);
+  const base = seed.length + 1 + tagBytes.length;
+  fields.forEach((f, i) => view.setUint32(base + i * 4, f));
+  const digest = await crypto.subtle.digest("SHA-256", payload);
+  return new Uint8Array(digest).slice(0, SALT_BYTES);
+}
+
 export function generateSeed(): Uint8Array {
   return crypto.getRandomValues(new Uint8Array(SEED_BYTES));
 }

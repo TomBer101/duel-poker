@@ -1,9 +1,11 @@
-import { commit, generateSalt, verify } from "./commitment";
+import { commit, deriveSalt, verify } from "./commitment";
 import { generateDrawOrder, shuffleDeck } from "./shuffle";
 import { cardId } from "../engine/deck";
 import type { Card } from "../engine/types";
 
 export type DealerCommitmentState = {
+  /** The secret seed (in-memory only, never serialized): placement salts derive from it. */
+  seed: Uint8Array;
   deck: Card[];
   commitments: string[];
   salts: Uint8Array[];
@@ -18,28 +20,45 @@ export type SelectorCommitmentState = {
 export type CardReveal = { card: Card; salt: Uint8Array };
 export type DrawReveal = { position: number; salt: Uint8Array };
 
-/** Dealer shuffles the deck and commits to every card's position. */
+/**
+ * Dealer shuffles the deck and commits to every card's position. Salts are
+ * deterministic in the seed (tag "deck", u32be position) so a refreshed client
+ * regenerates identical commitments.
+ */
 export async function generateDealerCommitments(
   seed: Uint8Array,
 ): Promise<DealerCommitmentState> {
   const deck = shuffleDeck(seed);
-  const salts = deck.map(() => generateSalt());
+  const salts = await Promise.all(deck.map((_, i) => deriveSalt(seed, "deck", i)));
   const commitments = await Promise.all(
     deck.map((card, i) => commit(cardId(card), salts[i])),
   );
-  return { deck, commitments, salts };
+  return { seed, deck, commitments, salts };
 }
 
-/** Selector generates a draw order and commits to every draw index's position. */
+/** Selector generates a draw order and commits to every draw index's position (tag "draw"). */
 export async function generateSelectorCommitments(
   seed: Uint8Array,
 ): Promise<SelectorCommitmentState> {
   const drawOrder = generateDrawOrder(seed);
-  const salts = drawOrder.map(() => generateSalt());
+  const salts = await Promise.all(drawOrder.map((_, i) => deriveSalt(seed, "draw", i)));
   const commitments = await Promise.all(
     drawOrder.map((position, i) => commit(String(position), salts[i])),
   );
   return { drawOrder, commitments, salts };
+}
+
+/**
+ * Salt for a dealer placement commitment. Layout: seed || 0x05 || "place" ||
+ * u32be handIndex || u32be drawIndex. A swap uses a different drawIndex, so
+ * it gets a fresh salt.
+ */
+export function derivePlacementSalt(
+  seed: Uint8Array,
+  handIndex: number,
+  drawIndex: number,
+): Promise<Uint8Array> {
+  return deriveSalt(seed, "place", handIndex, drawIndex);
 }
 
 /** Selector reveals the deck position it committed to for a draw index. */
