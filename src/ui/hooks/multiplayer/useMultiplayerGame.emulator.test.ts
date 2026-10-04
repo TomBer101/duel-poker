@@ -1,12 +1,14 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, test, beforeEach, afterEach, vi } from "vitest";
+import { describe, expect, test, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import { connectToEmulators, createFirebaseClient, signInAnonymous } from "../../../net/firebase";
 import { loadSeed } from "../../../crypto/seedStorage";
-import { publishDealer } from "../../../net/roomState";
+import { publishRematchVote, resetForRematch } from "../../../net/roomState";
+import { createRoom, joinRoom } from "../../../net/room";
 import { useMultiplayerGame } from "./useMultiplayerGame";
 import { get, ref, type Database } from "firebase/database";
 import type { PlayerId } from "../../../engine/types";
-import { publishReveal, type ProtocolReveal } from "../../../net/sync";
+import { publishEvent, publishReveal, type ProtocolReveal } from "../../../net/sync";
+import databaseRules from "../../../../database.rules.json";
 
 // The DEAL event schedules 10 staggered `card-place` sfx via real setTimeouts
 // (see ui/sound/gameSounds.ts). jsdom doesn't implement HTMLMediaElement.play,
@@ -81,17 +83,79 @@ async function drivePlacingTurns(
   }
 }
 
-let db: Database;
+// --- Real security rules -----------------------------------------------------
+// The clients talk to the `test-default-rtdb` namespace (dummyConfig's
+// databaseURL). The RTDB emulator applies firebase.json's rules only to the
+// project's default instance; any other namespace runs with OPEN rules, so
+// without this the rules would never execute here. beforeAll loads the real
+// database.rules.json into this namespace with the emulator's admin endpoint
+// (the same `PUT /.settings/rules.json?ns=` + `Bearer owner` call that
+// @firebase/rules-unit-testing's initializeTestEnvironment makes). The first
+// describe block below proves a rule-violating write is actually rejected.
+const EMULATOR_DB = "http://127.0.0.1:9000";
+const NAMESPACE = new URL(dummyConfig.databaseURL).hostname.split(".")[0];
+
+beforeAll(async () => {
+  const res = await fetch(`${EMULATOR_DB}/.settings/rules.json?ns=${NAMESPACE}`, {
+    method: "PUT",
+    headers: { Authorization: "Bearer owner" },
+    body: JSON.stringify(databaseRules),
+  });
+  if (!res.ok) throw new Error(`loading security rules failed: ${await res.text()}`);
+});
+
+/** Rules-bypassing write (admin token): stands in for a malicious client that
+ *  somehow got a forged message past the server, to test the clients' own
+ *  verification as defense in depth. */
+async function adminPush(path: string, value: unknown): Promise<void> {
+  const res = await fetch(`${EMULATOR_DB}/${path}.json?ns=${NAMESPACE}`, {
+    method: "POST",
+    headers: { Authorization: "Bearer owner" },
+    body: JSON.stringify(value),
+  });
+  if (!res.ok) throw new Error(`admin write failed: ${await res.text()}`);
+}
+
+// Two real clients with distinct anonymous users: p1 creates the room via the
+// real createRoom (which also announces p1 as game 1's dealer), p2 joins it.
+let db: Database; // p1's client
+let db2: Database; // p2's client
 let roomId: string;
 let appCounter = 0;
 
 beforeEach(async () => {
-  const client = createFirebaseClient(dummyConfig, `mpgame-test-${appCounter}`);
-  connectToEmulators(client);
-  await signInAnonymous(client.auth);
-  db = client.db;
-  roomId = `MPGAME${appCounter}`;
+  const c1 = createFirebaseClient(dummyConfig, `mpgame-p1-${appCounter}`);
+  const c2 = createFirebaseClient(dummyConfig, `mpgame-p2-${appCounter}`);
   appCounter++;
+  connectToEmulators(c1);
+  connectToEmulators(c2);
+  const [u1, u2] = await Promise.all([signInAnonymous(c1.auth), signInAnonymous(c2.auth)]);
+  db = c1.db;
+  db2 = c2.db;
+  roomId = await createRoom(db, u1.user.uid, "Alice", "pw");
+  await joinRoom(db2, u2.user.uid, roomId, "Bob", "pw");
+});
+
+/** Game 1 is dealt by p1 (createRoom). A p2-dealt game is reached the real
+ *  way: both players vote for a rematch and the reset hands p2 the deal. */
+async function dealtBy(dealer: PlayerId): Promise<void> {
+  if (dealer === "p1") return;
+  await publishRematchVote(db, roomId, "p1");
+  await publishRematchVote(db2, roomId, "p2");
+  await resetForRematch(db, roomId, "p2", 2);
+}
+
+describe("real security rules are enforced in this namespace", () => {
+  test("rule-violating writes from the seated clients are rejected", async () => {
+    // p2 is the selector in game 1: it may not publish a placementCommit,
+    // nor forfeit on its own behalf.
+    await expect(
+      publishReveal(db2, roomId, { kind: "placementCommit", by: "p2", handIndex: 0, commitment: "0".repeat(64) }),
+    ).rejects.toThrow(/permission.denied/i);
+    await expect(publishEvent(db2, roomId, { type: "FORFEIT", by: "p2" })).rejects.toThrow(/permission.denied/i);
+    // ...while a legal write from the same client goes through.
+    await expect(publishEvent(db2, roomId, { type: "FORFEIT", by: "p1" })).resolves.toBeUndefined();
+  });
 });
 
 afterEach(() => {
@@ -101,10 +165,10 @@ afterEach(() => {
 describe("useMultiplayerGame — shuffling and opening deal", () => {
   test("both players end the opening deal with 10 cards dealt, dealer's deck order", async () => {
     const roomId0 = roomId;
-    await publishDealer(db, roomId, "p1");
+    await dealtBy("p1");
 
     const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
-    const p2 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p2", gameNumber: 1 }));
+    const p2 = renderHook(() => useMultiplayerGame({ db: db2, roomId, you: "p2", gameNumber: 1 }));
 
     await waitFor(
       () => {
@@ -143,10 +207,10 @@ describe("useMultiplayerGame — shuffling and opening deal", () => {
 
 describe("useMultiplayerGame - placing phase", () => {
   test("a full placing phase converges to matching hands on both clients", async () => {
-    await publishDealer(db, roomId, "p1"); // p1 is dealer, p2 is selector
+    await dealtBy("p1"); // p1 is dealer, p2 is selector
 
     const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
-    const p2 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p2", gameNumber: 1 }));
+    const p2 = renderHook(() => useMultiplayerGame({ db: db2, roomId, you: "p2", gameNumber: 1 }));
     const clients = { p1, p2 };
 
     await waitFor(() => expect(p1.result.current.state.phase).toBe("placing"), { timeout: 5000 });
@@ -209,9 +273,9 @@ describe("useMultiplayerGame - placing phase", () => {
 
 describe("useMultiplayerGame - replace and reveal phases", () => {
   async function playToReplace(dealer: PlayerId) {
-    await publishDealer(db, roomId, dealer);
+    await dealtBy(dealer);
     const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
-    const p2 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p2", gameNumber: 1 }));
+    const p2 = renderHook(() => useMultiplayerGame({ db: db2, roomId, you: "p2", gameNumber: 1 }));
     const clients = { p1, p2 };
     await waitFor(() => expect(p1.result.current.state.phase).toBe("placing"), { timeout: 5000 });
     for (let turn = 0; turn < 40; turn++) {
@@ -335,19 +399,26 @@ describe("useMultiplayerGame - replace and reveal phases", () => {
     const selector: PlayerId = "p2";
     const clients = await playToReplace(dealer);
     for (const who of ["p1", "p2"] as const) {
+      if (who === selector) {
+        // Inject a forged commit claiming to be from the dealer's own hand 0,
+        // but published by the selector — before the dealer's legitimate
+        // batch lands. Injected before the selector's (last) replace, so it is
+        // committed before the reveal phase can even start. The real rules
+        // reject this from the selector's client (see the rules tests), so it
+        // goes in with the admin token: this checks the clients' own
+        // verification still catches it if it ever got past the server.
+        await adminPush(`rooms/${roomId}/protocol/reveals`, {
+          kind: "placementCommit",
+          by: selector,
+          handIndex: 0,
+          commitment: "forged-commitment",
+        });
+      }
       await waitFor(() => expect(clients[who].result.current.state.pendingCard).not.toBeNull(), { timeout: 8000 });
       await act(async () => {
         await clients[who].result.current.replace(null);
       });
     }
-    // Inject a forged commit claiming to be from the dealer's own hand 0, but
-    // published by the selector — before the dealer's legitimate batch lands.
-    await publishReveal(db, roomId, {
-      kind: "placementCommit",
-      by: selector,
-      handIndex: 0,
-      commitment: "forged-commitment",
-    });
     await waitFor(
       () => {
         expect(clients.p1.result.current.hasViolation).toBe(true);
@@ -378,7 +449,9 @@ describe("useMultiplayerGame - replace and reveal phases", () => {
     await waitFor(() => expect(clients.p1.result.current.state.phase).toBe("reveal"), { timeout: 8000 });
     // A batch claiming to be from a bogus sender — a real client would never
     // publish this, but the wire format doesn't stop a malicious one from trying.
-    await publishReveal(db, roomId, {
+    // The real rules reject it (by must name the writer's seat), so it goes
+    // in with the admin token, as above.
+    await adminPush(`rooms/${roomId}/protocol/reveals`, {
       kind: "placementReveal",
       by: "p3" as unknown as PlayerId,
       cards: [],
@@ -395,10 +468,10 @@ describe("useMultiplayerGame - replace and reveal phases", () => {
 
 describe("useMultiplayerGame - timeout", () => {
   test("a normal-turn timeout: the opponent reports my resolved card, both clients converge", async () => {
-    await publishDealer(db, roomId, "p1"); // p1 dealer, p2 selector
+    await dealtBy("p1"); // p1 dealer, p2 selector
 
     const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
-    const p2 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p2", gameNumber: 1 }));
+    const p2 = renderHook(() => useMultiplayerGame({ db: db2, roomId, you: "p2", gameNumber: 1 }));
     await waitFor(() => expect(p1.result.current.state.phase).toBe("placing"), { timeout: 5000 });
 
     // p1's (the dealer's) first turn: a normal, non-face-down placement.
@@ -448,10 +521,10 @@ describe("useMultiplayerGame - timeout", () => {
   }, 30000);
 
   test("a hidden-turn timeout: the dealer's own face-down turn applies TIMEOUT_HIDDEN on both clients", async () => {
-    await publishDealer(db, roomId, "p1"); // p1 dealer, p2 selector
+    await dealtBy("p1"); // p1 dealer, p2 selector
 
     const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
-    const p2 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p2", gameNumber: 1 }));
+    const p2 = renderHook(() => useMultiplayerGame({ db: db2, roomId, you: "p2", gameNumber: 1 }));
     const clients = { p1, p2 };
     await waitFor(() => expect(p1.result.current.state.phase).toBe("placing"), { timeout: 5000 });
 
@@ -516,10 +589,10 @@ describe("useMultiplayerGame - timeout", () => {
   }, 60000);
 
   test("a hidden-turn timeout arriving before my own position reveal lands: retries, then applies the real card", async () => {
-    await publishDealer(db, roomId, "p1"); // p1 dealer, p2 selector
+    await dealtBy("p1"); // p1 dealer, p2 selector
 
     const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
-    const p2 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p2", gameNumber: 1 }));
+    const p2 = renderHook(() => useMultiplayerGame({ db: db2, roomId, you: "p2", gameNumber: 1 }));
     const clients = { p1, p2 };
     await waitFor(() => expect(p1.result.current.state.phase).toBe("placing"), { timeout: 5000 });
 
@@ -569,10 +642,10 @@ describe("useMultiplayerGame - timeout", () => {
   }, 20000);
 
   test("a hidden-turn timeout whose position reveal never lands: falls back to the card-less TIMEOUT_HIDDEN after the retry bound", async () => {
-    await publishDealer(db, roomId, "p1"); // p1 dealer, p2 selector
+    await dealtBy("p1"); // p1 dealer, p2 selector
 
     const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
-    const p2 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p2", gameNumber: 1 }));
+    const p2 = renderHook(() => useMultiplayerGame({ db: db2, roomId, you: "p2", gameNumber: 1 }));
     const clients = { p1, p2 };
     await waitFor(() => expect(p1.result.current.state.phase).toBe("placing"), { timeout: 5000 });
 
@@ -619,13 +692,14 @@ describe("useMultiplayerGame - timeout", () => {
 
   test("timeout() is a safe no-op before setup completes and on my own turn", async () => {
     const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
-    // Role/dealer not resolved yet (no dealer published, p2 not even
-    // mounted): must not throw, must not change anything.
+    // Role/dealer not resolved yet (createRoom already announced the dealer,
+    // but the hook's dealer subscription has not delivered it on this first
+    // render, and p2 is not even mounted): must not throw, must not change
+    // anything.
     expect(() => act(() => p1.result.current.timeout())).not.toThrow();
     expect(p1.result.current.state.phase).not.toBe("result");
 
-    await publishDealer(db, roomId, "p1");
-    const p2 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p2", gameNumber: 1 }));
+    const p2 =renderHook(() => useMultiplayerGame({ db: db2, roomId, you: "p2", gameNumber: 1 }));
     await waitFor(() => expect(p1.result.current.state.phase).toBe("placing"), { timeout: 5000 });
     await waitFor(() => expect(p1.result.current.state.pendingCard).not.toBeNull(), { timeout: 5000 });
 
@@ -640,9 +714,9 @@ describe("useMultiplayerGame - timeout", () => {
 
 describe("useMultiplayerGame - claimWin (FORFEIT)", () => {
   async function startPlacing() {
-    await publishDealer(db, roomId, "p1");
+    await dealtBy("p1");
     const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
-    const p2 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p2", gameNumber: 1 }));
+    const p2 = renderHook(() => useMultiplayerGame({ db: db2, roomId, you: "p2", gameNumber: 1 }));
     await waitFor(
       () => {
         // The initial state is already "placing"; drawCount >= 10 means DEAL landed.
