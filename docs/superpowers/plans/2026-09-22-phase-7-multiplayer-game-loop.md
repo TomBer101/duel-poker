@@ -2812,122 +2812,50 @@ git commit -m "feat(ui): session score tracked and shown on the result overlay"
 
 ---
 
-### Task 14: Refresh recovery
+### Task 14: Refresh recovery (REWRITTEN 2026-10-05 as 14a, 14b, 14c)
 
-> **ADDITIONAL CARRY-OVERS (2026-10-04).** (5) With the real rules, republishing the same commitments after a refresh is now DENIED as a second write (write-once), which leaves an unhandled rejection in the seed/commitments IIFE in `useShuffle.ts`: recovery must detect that its commitments are already published (read them back) and reuse its stored seed instead of republishing, and the IIFE must have a catch. (6) Presence: the real FORFEIT rule now requires the forfeiting seat's presence to be `false`, so the presence re-arm on reconnect (carry-over 2) is also what prevents a live, reconnected player from being forfeited.
+> **Why the original Task 14 was replaced.** The original sketch ("replay the event log on mount") cannot work in the architecture that was actually built. A refreshed client has to be able to REBUILD its whole game: (1) **Salts are random and held only in memory.** `generateDealerCommitments(seed)` / `generateSelectorCommitments(seed)` derive the deck / draw order from the stored seed but draw each commitment's salt from `generateSalt()`. After a refresh the regenerated commitments differ from the published ones, so every later reveal fails verification (a violation). The dealer's placement salts (`pendingPlacementSalts`) are in memory too. (2) **The published event log is not the whole game.** DEAL and DRAW are never published; only END_TURN, REPLACE, TIMEOUT, TIMEOUT_HIDDEN and FORFEIT are, and the intake deliberately IGNORES the client's own events (it applied them locally at send time), so replaying the log would never rebuild the client's own moves. (3) **A refreshed client republishes.** Commitments are write-once (second write denied, unhandled rejection), the selector/dealer re-answer reveals (harmless duplicates), and a second `placementReveal` batch is recorded as a violation by the opponent. (4) **Presence** is never re-armed. (5) **Dispatch-before-publish** (see Task 16 item 4) means a rules denial silently desyncs, and the same mechanism (event identity) is what recovery needs, so it is done here once.
+> Sequence: **14a** deterministic salts, **14b** event identity + publish-then-apply + log-driven catch-up, **14c** protocol-guard recovery + presence + score retry. Decisions: the seed (already stored per `(roomId, gameNumber, you)` in localStorage) is the recovery root; if it is gone the game cannot be resumed and the client must say so clearly (record a violation / show the Task 15 screen) rather than guess.
 
-> **CARRY-OVERS (2026-10-03), mandatory scope for this task.** (1) The hook now lives in `src/ui/hooks/multiplayer/` (see Task 10d's map): put recovery in its own `useRecovery.ts` called from the root, not inlined. (2) **Presence must be (re)established on the game page and survive reconnects.** Today `setupPresence` (`net/sync.ts`) arms `onDisconnect(false)` once and writes `true` once, never re-arms on reconnect, and is only called from the lobby. After a refresh of the game page or any connection drop, that player's presence stays `false`: the opponent's DisconnectOverlay never clears and they can claim a win against a live player. Fix: call setupPresence when the game page mounts, and re-arm on Firebase `.info/connected` becoming true (add a `subscribeToConnection`-style helper in `net/` with an emulator test; keep `net/` the only firebase importer). (3) The FORFEIT echo rule ignores the claimer's own FORFEIT event, so after a refresh the claimer replaying history would never reach `result`: replay must apply FORFEIT for the claimer too (dedupe replayed events by push key). (4) Dedupe of replayed events by push key is required (see the TODO in `useOpponentEvents.ts`).
+---
 
-**Files:**
-- Modify: `src/ui/hooks/useMultiplayerGame.ts`
-- Test: `src/ui/hooks/useMultiplayerGame.emulator.test.ts` (extend)
+### Task 14a: Deterministic salts
 
-**Interfaces:**
-- Consumes: `subscribeToEvents` (`net/sync.ts`, Phase 6), `replay`
-  (`engine/reducer.ts`, already exported), `loadSeed` (`crypto/seedStorage.ts`).
-- Produces: on mount, before doing anything else, the hook replays any
-  events already in `/rooms/{roomId}/events` through `gameReducer` to
-  reach the current `GameState` synchronously, *then* resumes the live
-  reveal-chain subscriptions from Tasks 5-7 (which naturally no-op for
-  draw indices already resolved, since `publishedPosition`/`publishedCard`
-  would need to be seeded from the replay too — see implementation below).
+**Files:** `src/crypto/protocol.ts` (+ `protocol.test.ts`), `src/crypto/commitment.ts` if a helper belongs there, `src/ui/hooks/multiplayer/*` (only where salts are generated: `useShuffle.ts` seed effect, `myMoves.ts` placePending/replace/commitOwnFaceDownCard, `useOpponentEvents.ts` translation path), `context.ts` if the seed has to be threaded.
 
-- [ ] **Step 1: Write the failing test**
+**Requirement:** every salt is a deterministic function of the secret seed so that a refreshed client regenerates IDENTICAL commitments and salts.
+- Commitment salts: `salt_i = first 16 bytes of SHA-256(seed ‖ domainTag ‖ i)` with distinct domain tags for the dealer deck commitments, the selector draw-order commitments and placement commitments, so no two salts in a game can collide or be related except through the seed. Encode the inputs unambiguously (fixed-width index, length-delimited tag).
+- Placement salts: `derivePlacementSalt(seed, handIndex, drawIndex)`; a swap into a hand uses a different `drawIndex`, so it gets a different salt (latest commit wins is unchanged). Replace every `generateSalt()` used for placement commitments with it.
+- `generate*Commitments(seed)` stay async and keep their return shape (`{deck|drawOrder, commitments, salts}`), plus expose the seed on the state if that is the cleanest way to thread it.
+- Security note for the report: salt secrecy now equals seed secrecy (128-bit), the same root that already protects the deck order; unchanged assumption.
+**Tests (table-driven where possible):** same seed gives byte-identical commitments and salts across calls; different seeds differ; the three domains never produce equal salts for the same index; reveals still verify end to end; `derivePlacementSalt` deterministic, differs by handIndex and by drawIndex; the existing crypto/hook tests keep passing unchanged. Run `pnpm test`, `pnpm test:emulator:ui` x3, tsc, lint.
 
-```ts
-// append to src/ui/hooks/useMultiplayerGame.emulator.test.ts
-test("remounting mid-game (simulated refresh) recovers the same state", async () => {
-  await publishDealer(db, roomId, "p1");
-  const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
-  const p2 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p2", gameNumber: 1 }));
-  await waitFor(() => expect(p1.result.current.state.phase).toBe("placing"), { timeout: 5000 });
+---
 
-  const stateBeforeRefresh = p1.result.current.state;
-  p1.unmount(); // simulates a page refresh dropping the p1 client
+### Task 14b: Event identity, publish-then-apply, log-driven catch-up
 
-  const p1Again = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
-  await waitFor(
-    () => expect(p1Again.result.current.state).toEqual(stateBeforeRefresh),
-    { timeout: 5000 },
-  );
-});
-```
+**Files:** `src/net/sync.ts` (+ tests), `src/ui/hooks/multiplayer/myMoves.ts`, `useOpponentEvents.ts` (+ `useOpponentEvents.test.ts`), `context.ts`, `useMultiplayerGame.emulator.test.ts`.
 
-- [ ] **Step 2: Run test to verify it fails**
+**Design (event sourcing: the Firebase event log is the source of truth; every client applies every event exactly once, in log order):**
+1. **Event identity.** `subscribeToEvents` hands the callback `(event, key)` (the push key). Add `newEventKey(db, roomId)` (a pre-generated push key) and let `publishEvent(db, roomId, event, nextTurn?, key?)` use it and return the key. Update all callers and tests.
+2. **Publish-then-apply.** In `placePending`, `replace`, `timeout`, `claimWin`: generate the key FIRST, register it in an `appliedKeys` / `ownKeys` set BEFORE the write (Firebase raises optimistic local events, so the echo can arrive before the ack), `await publishEvent(...)`; ONLY on success dispatch locally; on rejection do NOT dispatch, clear the in-flight guard, and surface it (console + recordViolation when it looks like a protocol-level denial). The commitment publish that precedes a hidden placement keeps its order. A rules denial therefore never desyncs.
+3. **Intake applies the log uniformly.** Replace the author-based `isOwnEcho` filter with key-based dedupe: ignore an event whose key is in the applied/own set; apply everything else in log order, whether authored by me or the opponent. Handlers that assumed "opponent authored" get an explicit own-authored branch: my END_TURN (`by === you`): wait for my card to resolve (`pendingCard`), cross-check, dispatch `END_TURN` unchanged (the PLACE_HIDDEN translation only applies when `by` is the dealer and I am the selector); my REPLACE likewise; TIMEOUT/TIMEOUT_HIDDEN/FORFEIT authored by me about the opponent apply as written (`by` names the affected player). Keep every existing cross-check (faceDown flag vs local rules, legal hand, draw index) for both authors. For the dealer's own hidden placements/swaps found in the log, rebuild the bookkeeping the live path creates (`ownSlotDraw`, placement salt via `derivePlacementSalt`) WITHOUT publishing anything.
+4. **Catch-up.** On mount the subscription replays the whole log (onChildAdded); those events flow through the same queue and handlers, so a fresh instance reconstructs its engine state purely from: the commitments (history), the reveals (history; the DEAL assembly and per-turn DRAW effects rebuild every card) and the events (history). Make sure the intake does not stall on the first events because the reveal chain has not caught up (it already waits for `pendingCard` and re-checks every render).
+5. Delete the now-obsolete `isOwnEcho` and its table test, replacing it with dedupe tests. Resolve the TODOs about replay dedupe.
+**Tests:** unit: key dedupe (duplicate delivery applied once; own key ignored; unknown own-authored event applied); the own-authored handler branches; denial leaves state untouched. Emulator (real rules, two clients): a normal game still converges (all existing tests stay green); a forced `permission_denied` on an END_TURN (for example an out-of-turn forged scenario via a rules-denied write) leaves the local state unchanged and the game consistent; a late-mounted third observer instance of the same seat (simulating catch-up) reaches the identical state from the log alone mid-game.
+Out of scope: protocol guards and presence (14c), turn-integrity rules (Task 16).
 
-Run: `pnpm test:emulator:ui` (runs every *.emulator.test.ts under src/ui via the jsdom+emulator config added in Task 5 Step 0)
-Expected: FAIL — a fresh mount currently starts from scratch and re-shuffles
-with a *new* seed (no seed was loaded, since none was ever an exact miss —
-actually `loadSeed` already returns the prior seed via `seedStorage`, so
-the shuffle recomputes identically; what's missing is replaying `events`
-and seeding `publishedPosition`/`publishedCard`/`dealt` from them, so the
-freshly-mounted client doesn't try to re-run `DEAL` or diverge on
-`drawCount`).
+---
 
-- [ ] **Step 3: Implement**
+### Task 14c: Protocol-guard recovery, presence, score retry
 
-Add a replay effect that runs once, before the reveal-chain effects rely on
-`state.drawCount`:
-
-```ts
-  const recovered = useRef(false);
-  useEffect(() => {
-    if (recovered.current) return;
-    recovered.current = true;
-    let cancelled = false;
-    const events: GameEvent[] = [];
-    const unsubscribe = subscribeToEvents(db, roomId, (event) => {
-      if (cancelled) return;
-      events.push(event);
-    });
-    // subscribeToEvents (onChildAdded) fires synchronously for every
-    // existing child before this line returns in the RTDB SDK's local
-    // cache path used by the emulator/tests; give it one microtask to be
-    // safe in production against a slower initial fetch.
-    void Promise.resolve().then(() => {
-      if (cancelled) return;
-      unsubscribe();
-      if (events.length === 0) return;
-      for (const event of events) {
-        dispatch(event);
-        if (event.type === "DEAL") dealt.current = true;
-      }
-      const finalDrawCount = events.reduce(
-        (n, e) => (e.type === "DRAW" || e.type === "REPLACE_DRAW" ? n + 1 : n),
-        HANDS_PER_PLAYER * 2 * (events.some((e) => e.type === "DEAL") ? 1 : 0),
-      );
-      for (let i = 0; i < finalDrawCount; i++) {
-        publishedPosition.current.add(i);
-        publishedCard.current.add(i);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [db, roomId, dispatch]);
-```
-
-Note for the implementer: this marks past draw indices as already
-published on *both* halves so the eager-reveal effects don't try to
-re-publish reveals for cards already resolved — the protocol controller's
-own `protocol.current.positions`/`.cards` maps are rebuilt for free by the
-normal `subscribeToReveals` effect (Task 5) replaying the full
-`/protocol/reveals` log the same way `subscribeToEvents` does for
-`/events`, since both are `onChildAdded` subscriptions that fire for
-existing children on subscribe — no separate replay path needed for the
-protocol log itself.
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `pnpm test:emulator:ui` (runs every *.emulator.test.ts under src/ui via the jsdom+emulator config added in Task 5 Step 0)
-Expected: PASS (all cases in the file)
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/ui/hooks/useMultiplayerGame.ts src/ui/hooks/useMultiplayerGame.emulator.test.ts
-git commit -m "feat(ui): refresh recovery — replay the event log on mount"
-```
+**Files:** `src/ui/hooks/multiplayer/useShuffle.ts`, `useRevealPhase.ts`, `useSessionScore.ts`, `src/net/sync.ts` (+ `subscribeToConnection`), a new `useRecovery.ts` / `usePresence.ts` as appropriate, tests.
+1. **Do not republish what already exists.** Before publishing my commitments, read the node: if it exists, compare with the regenerated (now deterministic) commitments; equal means skip the publish; different or seed missing means the game cannot be resumed: record a clear violation (the Task 15 screen shows it). The seed/commitments IIFE gets a catch (no unhandled rejection).
+2. **Seed the guards from the logs.** On mount, read my own already-published position reveals (selector), card reveals (dealer) and placement batch from the reveal log and prefill `publishedPosition`, `publishedCard` and `batchPublished` so nothing is republished (a duplicate `placementReveal` batch would be recorded as a violation by the opponent).
+3. **Presence.** Call `setupPresence` when the game page mounts (it is only called from the lobby today) and re-arm on reconnect: new `net` helper `subscribeToConnection(db, cb)` over Firebase `.info/connected`; on every `true`, re-run the `onDisconnect(false)` arm and write `true`. Emulator test: after a simulated disconnect/reconnect the seat's presence is true again and the opponent's overlay clears. (With the FORFEIT presence gate in the rules, this is what prevents a live, reconnected player from being forfeited.)
+4. **Score retry (Task 13 minors).** `useSessionScore`: set the "scored" ref only after the write succeeds (or retry a bounded number of times on transient failure); fix the vacuous 'once' unit test so it exercises the ref guard (change deps between renders so the effect really re-runs).
+5. **Refresh tests (real rules, two clients, simulated refresh = unmount the instance and mount a fresh one with the same seat/gameNumber while keeping localStorage):** (a) refresh p1 after the opening deal and a few turns including a dealer hidden placement: the fresh instance reaches the identical `GameState` (card-less hidden slots included) and the game continues to a matching result; (b) refresh the dealer during the reveal phase: its batch is not republished and no violation is recorded; (c) refresh the selector in the replace phase; (d) refresh with the stored seed deleted: a clear violation, no crash; (e) the winner refreshing on the result screen still gets its point exactly once (or is rejected cleanly if already counted).
+Out of scope: Task 15 (the screen), Tasks 16/17.
 
 ---
 
@@ -3104,7 +3032,7 @@ git commit -m "feat(ui): protocol violation screen halts the game on a failed ve
 1. **Instant forged timeouts.** Today a player can write `TIMEOUT` / `TIMEOUT_HIDDEN` against the opponent at the very start of the opponent's turn (rules look at no elapsed time); three forfeit the opponent and the card on a forged `TIMEOUT` is injected into their hand. Add a rules gate: `now >= meta/turnStartedAt + 87000` (90s limit minus a small grace) on TIMEOUT and TIMEOUT_HIDDEN. The grace is only safe if the CLIENT corrects its clock: `useRemoteTimer` compares local `Date.now()` with a server timestamp and has no `.info/serverTimeOffset`; add the offset (new `net/` helper with an emulator test) so the client's countdown matches the server's clock to within about half a round trip.
 2. **Free re-stamping of `meta/turnStartedAt`.** Any seated player can rewrite it at any time, so the active player can stall forever (and re-anchor the timer). Rule: the active seat may only stamp together with a turn flip; the non-active seat may stamp any time (that only gives the opponent more time). Today the stamp is a separate write after the event (`publishTurnStarted` after `publishEvent`): move it INTO `publishEvent`'s multi-path update (same update as the event and `meta/turn`), and make only the non-active seat stamp after DEAL (`useOpeningDeal` currently has both seats stamp).
 3. **`meta/turn` is freely writable by either seat** (pre-existing), which defeats the END_TURN/REPLACE turn gate: a cheater sets `meta/turn` to their own seat, the opponent's move is denied but already applied locally (silent desync), then the cheater reports a TIMEOUT. Tighten: `meta/turn` may only FLIP to the other seat, and only in the same update as a new turn event (tie them with a `meta/lastEvent` push key that must name an event created in the same update; every turn event must flip). The reviewer proposed concrete expressions using `newData.parent()` (see `task-12a` review notes in the ledger); the emulator must test the exact multi-path shape, and the semantics of `newData.parent()` in a multi-path update on the PRODUCTION database must be smoke-tested after deploy (the emulator was more lenient than production once before).
-4. **Dispatch-before-publish desync.** Every move is dispatched locally before it is published (`myMoves.ts`), so any rules denial (including a legitimate race between a late END_TURN and an on-time TIMEOUT report) becomes a permanent silent desync. Change to publish-then-apply (apply the local dispatch when the write is accepted; on `permission_denied` do not apply and surface a clear error), or equivalent roll-back, keeping the opponent-event intake as the single applier where possible.
+4. **(DONE IN TASK 14b: publish-then-apply with event identity; keep this item only as the checklist of what 14b must prove.) Dispatch-before-publish desync.** Every move is dispatched locally before it is published (`myMoves.ts`), so any rules denial (including a legitimate race between a late END_TURN and an on-time TIMEOUT report) becomes a permanent silent desync. Change to publish-then-apply (apply the local dispatch when the write is accepted; on `permission_denied` do not apply and surface a clear error), or equivalent roll-back, keeping the opponent-event intake as the single applier where possible.
 5. **Test seam:** the emulator hook tests call `timeout()` immediately; add an admin-REST write that backdates `turnStartedAt` so the time gate can be exercised, plus a table of rules cases (too early denied, on time allowed, re-stamp by the active seat denied, flip without an event denied, event without a flip denied, `meta/turn` set arbitrarily denied). Turn the two `it.todo` entries Task 12a left in `rules.emulator.test.ts` into real tests.
 
 ### Task 17: Client integrity fixes
