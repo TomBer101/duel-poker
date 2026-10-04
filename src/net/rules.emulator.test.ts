@@ -167,9 +167,9 @@ const publishEvent = (event: Record<string, unknown>, nextTurn?: string) => (db:
     [at("events/pushA")]: event,
     ...(nextTurn ? { [at("meta/turn")]: nextTurn } : {}),
   });
-/** The exact shape resetForRematch writes. */
-const rematchReset = (dealer: string, overrides: Record<string, unknown> = {}) =>
-  update({
+/** The exact shape resetForRematch writes (with optional tweaks / omitted paths). */
+const rematchReset = (dealer: string, overrides: Record<string, unknown> = {}, omit: string[] = []) => {
+  const values: Record<string, unknown> = {
     events: null,
     protocol: { dealer },
     rematch: null,
@@ -177,7 +177,10 @@ const rematchReset = (dealer: string, overrides: Record<string, unknown> = {}) =
     "meta/turn": "p1",
     "meta/turnStartedAt": TIMESTAMP,
     ...overrides,
-  });
+  };
+  for (const key of omit) delete values[key];
+  return update(values);
+};
 
 const bothVoted = (room: Room) => {
   room.rematch = { p1: true, p2: true };
@@ -196,19 +199,22 @@ const withGameState = (room: Room) => {
   room.protocol = {
     dealer: "p1",
     commitments: { dealer: commitments(52), selector: commitments(52) },
-    reveals: { r0: { kind: "position", by: "p2", drawIndex: 0, position: 3, saltHex: "ab" } },
+    reveals: { r0: { kind: "position", by: "p2", drawIndex: 0, position: 3, saltHex: SALT } },
   };
 };
+/** Marks a seat as disconnected (what its onDisconnect writes). */
+const offline = (seat: string) => (room: Room) => {
+  (room.presence as Record<string, boolean>)[seat] = false;
+};
 
-const position = (by: string) => ({ kind: "position", by, drawIndex: 0, position: 7, saltHex: "aa" });
-const cardReveal = (by: string) => ({ kind: "card", by, position: 7, cardId: "Hearts-2", saltHex: "bb" });
+const SALT = "a".repeat(32); // 16-byte salt as hex
+const position = (by: string) => ({ kind: "position", by, drawIndex: 0, position: 7, saltHex: SALT });
+const cardReveal = (by: string) => ({ kind: "card", by, position: 7, cardId: "Hearts-2", saltHex: SALT });
 const placementCommit = (by: string) => ({ kind: "placementCommit", by, handIndex: 0, commitment: hex64(9) });
-const placementReveal = (by: string) => ({
-  kind: "placementReveal",
-  by,
-  cards: [{ handIndex: 0, cardId: "Hearts-2", saltHex: "cc", drawIndex: 40, deckSaltHex: "dd" }],
-});
+const batchEntry = (handIndex: number) => ({ handIndex, cardId: "Hearts-14", saltHex: SALT, drawIndex: 40 + handIndex, deckSaltHex: SALT });
+const placementReveal = (by: string, cards: unknown = [batchEntry(0)]) => ({ kind: "placementReveal", by, cards });
 const endTurn = (by: string) => ({ type: "END_TURN", by, handIndex: 0, faceDown: false });
+const timeoutEv = (card: unknown = { suit: "Hearts", rank: 2 }) => ({ type: "TIMEOUT", by: "p1", card });
 
 const cases: Case[] = [
   // --- protocol/dealer: written once, by p1, as "p1" (createRoom) ---
@@ -247,6 +253,7 @@ const cases: Case[] = [
   { name: "commitments/dealer: unseated user cannot write", as: "mallory", write: set("protocol/commitments/dealer", commitments(52)), allow: false },
   { name: "commitments/selector: the selector publishes 52 hashes", as: "bob", write: set("protocol/commitments/selector", commitments(52)), allow: true },
   { name: "commitments/selector: the dealer cannot write them", as: "alice", write: set("protocol/commitments/selector", commitments(52)), allow: false },
+  { name: "commitments/selector: unseated user cannot write", as: "mallory", write: set("protocol/commitments/selector", commitments(52)), allow: false },
   { name: "commitments/selector: nobody is selector before a dealer exists", as: "bob", seed: noDealer, write: set("protocol/commitments/selector", commitments(52)), allow: false },
   { name: "commitments: unknown role key is rejected", as: "alice", write: set("protocol/commitments/other", commitments(52)), allow: false },
   { name: "protocol: unknown child key is rejected", as: "alice", write: set("protocol/junk", "x"), allow: false },
@@ -265,6 +272,22 @@ const cases: Case[] = [
   { name: "reveals: the dealer publishes its placementReveal batch", as: "alice", write: push("protocol/reveals", placementReveal("p1")), allow: true },
   { name: "reveals: the selector publishes its placementReveal batch", as: "bob", write: push("protocol/reveals", placementReveal("p2")), allow: true },
   { name: "reveals: a placementReveal from a bogus seat is rejected", as: "bob", write: push("protocol/reveals", placementReveal("p3")), allow: false },
+  { name: "reveals: a placementReveal cannot impersonate the other seat", as: "alice", write: push("protocol/reveals", placementReveal("p2")), allow: false },
+  { name: "reveals: a card reveal cannot impersonate the dealer", as: "bob", write: push("protocol/reveals", cardReveal("p1")), allow: false },
+  { name: "reveals: a full 5-card batch", as: "alice", write: push("protocol/reveals", placementReveal("p1", [0, 1, 2, 3, 4].map(batchEntry))), allow: true },
+  { name: "reveals: an oversized (6-entry) batch", as: "alice", write: push("protocol/reveals", placementReveal("p1", [0, 1, 2, 3, 4, 0].map(batchEntry))), allow: false },
+  { name: "reveals: a batch entry with an extra key", as: "alice", write: push("protocol/reveals", placementReveal("p1", [{ ...batchEntry(0), faceUp: true }])), allow: false },
+  { name: "reveals: a batch entry with a bad cardId", as: "alice", write: push("protocol/reveals", placementReveal("p1", [{ ...batchEntry(0), cardId: "Hearts-1" }])), allow: false },
+  { name: "reveals: a batch entry missing its deck salt", as: "alice", write: push("protocol/reveals", placementReveal("p1", [{ handIndex: 0, cardId: "Hearts-2", saltHex: SALT, drawIndex: 40 }])), allow: false },
+  { name: "reveals: cards on a non-batch kind", as: "alice", write: push("protocol/reveals", { ...cardReveal("p1"), cards: [batchEntry(0)] }), allow: false },
+  { name: "reveals: drawIndex 52 is out of range", as: "bob", write: push("protocol/reveals", { ...position("p2"), drawIndex: 52 }), allow: false },
+  { name: "reveals: negative position", as: "bob", write: push("protocol/reveals", { ...position("p2"), position: -1 }), allow: false },
+  { name: "reveals: placementCommit with handIndex 7", as: "alice", write: push("protocol/reveals", { ...placementCommit("p1"), handIndex: 7 }), allow: false },
+  { name: "reveals: saltHex of the wrong length", as: "bob", write: push("protocol/reveals", { ...position("p2"), saltHex: "ab" }), allow: false },
+  { name: "reveals: saltHex that is not hex", as: "bob", write: push("protocol/reveals", { ...position("p2"), saltHex: "z".repeat(32) }), allow: false },
+  { name: "reveals: cardId with rank 15", as: "alice", write: push("protocol/reveals", { ...cardReveal("p1"), cardId: "Hearts-15" }), allow: false },
+  { name: "reveals: cardId with a bad suit", as: "alice", write: push("protocol/reveals", { ...cardReveal("p1"), cardId: "Stars-2" }), allow: false },
+  { name: "reveals: placementCommit with a non-hash commitment", as: "alice", write: push("protocol/reveals", { ...placementCommit("p1"), commitment: "forged" }), allow: false },
   { name: "reveals: write-once (no overwriting an existing reveal)", as: "bob", seed: withGameState, write: set("protocol/reveals/r0", position("p2")), allow: false },
   { name: "reveals: unknown kind is rejected", as: "bob", write: push("protocol/reveals", { kind: "card-ish", by: "p2" }), allow: false },
   { name: "reveals: missing field is a bad shape", as: "bob", write: push("protocol/reveals", { kind: "position", by: "p2", drawIndex: 0, position: 7 }), allow: false },
@@ -285,10 +308,27 @@ const cases: Case[] = [
   { name: "events: TIMEOUT_HIDDEN reported by the other seat", as: "bob", write: publishEvent({ type: "TIMEOUT_HIDDEN", by: "p1" }, "p2"), allow: true },
   { name: "events: TIMEOUT_HIDDEN written by a non-reporter (the timed-out seat)", as: "alice", write: publishEvent({ type: "TIMEOUT_HIDDEN", by: "p1" }, "p2"), allow: false },
   { name: "events: TIMEOUT_HIDDEN by an unseated user", as: "mallory", write: push("events", { type: "TIMEOUT_HIDDEN", by: "p1" }), allow: false },
-  { name: "events: FORFEIT naming the opponent", as: "alice", write: publishEvent({ type: "FORFEIT", by: "p2" }), allow: true },
-  { name: "events: FORFEIT is allowed off-turn too", as: "bob", write: publishEvent({ type: "FORFEIT", by: "p1" }), allow: true },
-  { name: "events: self-reported FORFEIT", as: "alice", write: publishEvent({ type: "FORFEIT", by: "p1" }), allow: false },
-  { name: "events: FORFEIT by an unseated user", as: "mallory", write: push("events", { type: "FORFEIT", by: "p1" }), allow: false },
+  { name: "events: FORFEIT naming the disconnected opponent", as: "alice", seed: offline("p2"), write: publishEvent({ type: "FORFEIT", by: "p2" }), allow: true },
+  { name: "events: FORFEIT is allowed off-turn too", as: "bob", seed: offline("p1"), write: publishEvent({ type: "FORFEIT", by: "p1" }), allow: true },
+  { name: "events: FORFEIT against a present opponent", as: "alice", write: publishEvent({ type: "FORFEIT", by: "p2" }), allow: false },
+  { name: "events: FORFEIT against an opponent with no presence node", as: "alice", seed: (r) => { delete (r.presence as Record<string, boolean>).p2; }, write: publishEvent({ type: "FORFEIT", by: "p2" }), allow: false },
+  { name: "events: self-reported FORFEIT", as: "alice", seed: offline("p1"), write: publishEvent({ type: "FORFEIT", by: "p1" }), allow: false },
+  { name: "events: FORFEIT by an unseated user", as: "mallory", seed: offline("p1"), write: push("events", { type: "FORFEIT", by: "p1" }), allow: false },
+  { name: "events: FORFEIT carries only type and by", as: "alice", seed: offline("p2"), write: publishEvent({ type: "FORFEIT", by: "p2", winner: "p1" }), allow: false },
+
+  // --- events: shapes ---
+  { name: "events: REPLACE pass (handIndex dropped as null)", as: "alice", write: publishEvent({ type: "REPLACE", by: "p1" }, "p2"), allow: true },
+  { name: "events: REPLACE with handIndex 5", as: "alice", write: publishEvent({ type: "REPLACE", by: "p1", handIndex: 5 }, "p2"), allow: false },
+  { name: "events: END_TURN with illegal handIndex 7", as: "alice", write: publishEvent({ ...endTurn("p1"), handIndex: 7 }, "p2"), allow: false },
+  { name: "events: END_TURN with fractional handIndex", as: "alice", write: publishEvent({ ...endTurn("p1"), handIndex: 1.5 }, "p2"), allow: false },
+  { name: "events: END_TURN with non-boolean faceDown", as: "alice", write: publishEvent({ ...endTurn("p1"), faceDown: "yes" }, "p2"), allow: false },
+  { name: "events: END_TURN missing faceDown", as: "alice", write: publishEvent({ type: "END_TURN", by: "p1", handIndex: 0 }, "p2"), allow: false },
+  { name: "events: END_TURN with an extra key", as: "alice", write: publishEvent({ ...endTurn("p1"), card: { suit: "Hearts", rank: 2 } }, "p2"), allow: false },
+  { name: "events: TIMEOUT with a bad rank", as: "bob", write: publishEvent(timeoutEv({ suit: "Hearts", rank: 15 }), "p2"), allow: false },
+  { name: "events: TIMEOUT with a bad suit", as: "bob", write: publishEvent(timeoutEv({ suit: "Stars", rank: 2 }), "p2"), allow: false },
+  { name: "events: TIMEOUT with an extra card key", as: "bob", write: publishEvent(timeoutEv({ suit: "Hearts", rank: 2, faceUp: true }), "p2"), allow: false },
+  { name: "events: TIMEOUT without a card", as: "bob", write: publishEvent({ type: "TIMEOUT", by: "p1" }, "p2"), allow: false },
+  { name: "events: TIMEOUT_HIDDEN carrying a card", as: "bob", write: publishEvent({ type: "TIMEOUT_HIDDEN", by: "p1", card: { suit: "Hearts", rank: 2 } }, "p2"), allow: false },
   { name: "events: removed type DEAL", as: "alice", write: push("events", { type: "DEAL", by: "p1" }), allow: false },
   { name: "events: removed type DRAW", as: "alice", write: push("events", { type: "DRAW", by: "p1", card: { suit: "Hearts", rank: 2 } }), allow: false },
   { name: "events: removed type REPLACE_DRAW", as: "alice", write: push("events", { type: "REPLACE_DRAW", by: "p1", card: { suit: "Hearts", rank: 2 } }), allow: false },
@@ -312,12 +352,12 @@ const cases: Case[] = [
   { name: "rematch: unseated user cannot vote", as: "mallory", write: set("rematch/p1", true), allow: false },
 
   // --- gameNumber (only during a rematch reset, +1 each time; absent = game 1) ---
-  { name: "gameNumber: absent -> 2 once both voted", as: "alice", seed: bothVoted, write: set("gameNumber", 2), allow: true },
-  { name: "gameNumber: 2 -> 3 once both voted", as: "bob", seed: (r) => { bothVoted(r); r.gameNumber = 2; }, write: set("gameNumber", 3), allow: true },
-  { name: "gameNumber: skipping a number (absent -> 3)", as: "alice", seed: bothVoted, write: set("gameNumber", 3), allow: false },
-  { name: "gameNumber: skipping a number (2 -> 4)", as: "alice", seed: (r) => { bothVoted(r); r.gameNumber = 2; }, write: set("gameNumber", 4), allow: false },
-  { name: "gameNumber: not before both voted", as: "alice", seed: (r) => { r.rematch = { p1: true }; }, write: set("gameNumber", 2), allow: false },
-  { name: "gameNumber: unseated user", as: "mallory", seed: bothVoted, write: set("gameNumber", 2), allow: false },
+  { name: "gameNumber: absent -> 2 in the full reset", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: rematchReset("p2"), allow: true },
+  { name: "gameNumber: 2 -> 3 in the full reset", as: "bob", seed: (r) => { withGameState(r); bothVoted(r); r.gameNumber = 2; r.protocol!.dealer = "p2"; }, write: rematchReset("p1", { gameNumber: 3 }), allow: true },
+  { name: "gameNumber: skipping a number (2 -> 4)", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); r.gameNumber = 2; r.protocol!.dealer = "p2"; }, write: rematchReset("p1", { gameNumber: 4 }), allow: false },
+  { name: "gameNumber: not a number", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: rematchReset("p2", { gameNumber: "2" }), allow: false },
+  { name: "gameNumber: not before both voted", as: "alice", seed: (r) => { withGameState(r); r.rematch = { p1: true }; }, write: rematchReset("p2"), allow: false },
+  { name: "gameNumber: unseated user", as: "mallory", seed: (r) => { withGameState(r); bothVoted(r); }, write: rematchReset("p2"), allow: false },
 
   // --- score/$p (the winner's own client increments its own score by 1) ---
   { name: "score: first win (absent -> 1)", as: "alice", write: set("score/p1", 1), allow: true },
@@ -330,7 +370,15 @@ const cases: Case[] = [
 
   // --- rematch reset (resetForRematch's multi-path update) ---
   { name: "reset: after both votes, the full reset succeeds", as: "bob", seed: (r) => { withGameState(r); bothVoted(r); }, write: rematchReset("p2"), allow: true },
-  { name: "reset: after both votes, deleting events alone succeeds", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: set("events", null), allow: true },
+  { name: "reset: partial reset, deleting events alone", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: set("events", null), allow: false },
+  { name: "reset: partial reset, protocol alone", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: set("protocol", { dealer: "p2" }), allow: false },
+  { name: "reset: partial reset, gameNumber alone", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: set("gameNumber", 2), allow: false },
+  { name: "reset: partial reset, rematch votes alone", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: set("rematch", null), allow: false },
+  { name: "reset: leaving the rematch votes in place", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: rematchReset("p2", {}, ["rematch"]), allow: false },
+  { name: "reset: keeping the events log", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: rematchReset("p2", {}, ["events"]), allow: false },
+  { name: "reset: without bumping gameNumber", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: rematchReset("p2", {}, ["gameNumber"]), allow: false },
+  { name: "reset: skipping a gameNumber", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: rematchReset("p2", { gameNumber: 3 }), allow: false },
+  { name: "reset: a second reset once the votes are cleared", as: "alice", seed: (r) => { r.gameNumber = 2; r.protocol = { dealer: "p2" }; }, write: rematchReset("p1", { gameNumber: 3 }), allow: false },
   { name: "reset: before any vote", as: "alice", seed: withGameState, write: rematchReset("p2"), allow: false },
   { name: "reset: with only one vote", as: "alice", seed: (r) => { withGameState(r); r.rematch = { p1: true }; }, write: rematchReset("p2"), allow: false },
   { name: "reset: deleting events before both votes", as: "alice", seed: withGameState, write: set("events", null), allow: false },
@@ -355,4 +403,8 @@ describe("Phase 7 protocol rules", () => {
     const db = as === null ? testEnv.unauthenticatedContext().database() : testEnv.authenticatedContext(UID[as]).database();
     await (allow ? assertSucceeds(write(db)) : assertFails(write(db)));
   });
+
+  // Known open items, scheduled separately (not asserted either way here).
+  test.todo("meta/turn may only flip to the other seat (Task 16)");
+  test.todo("TIMEOUT/TIMEOUT_HIDDEN denied before the turn deadline (Task 16)");
 });

@@ -1,13 +1,13 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, test, beforeAll, beforeEach, afterEach, vi } from "vitest";
+import { describe, expect, test, afterAll, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import { connectToEmulators, createFirebaseClient, signInAnonymous } from "../../../net/firebase";
 import { loadSeed } from "../../../crypto/seedStorage";
 import { publishRematchVote, resetForRematch } from "../../../net/roomState";
 import { createRoom, joinRoom } from "../../../net/room";
 import { useMultiplayerGame } from "./useMultiplayerGame";
-import { get, ref, type Database } from "firebase/database";
+import { get, goOffline, goOnline, ref, type Database } from "firebase/database";
 import type { PlayerId } from "../../../engine/types";
-import { publishEvent, publishReveal, type ProtocolReveal } from "../../../net/sync";
+import { publishEvent, publishReveal, setupPresence, type ProtocolReveal } from "../../../net/sync";
 import databaseRules from "../../../../database.rules.json";
 
 // The DEAL event schedules 10 staggered `card-place` sfx via real setTimeouts
@@ -95,14 +95,20 @@ async function drivePlacingTurns(
 const EMULATOR_DB = "http://127.0.0.1:9000";
 const NAMESPACE = new URL(dummyConfig.databaseURL).hostname.split(".")[0];
 
-beforeAll(async () => {
+async function putRules(rules: unknown): Promise<void> {
   const res = await fetch(`${EMULATOR_DB}/.settings/rules.json?ns=${NAMESPACE}`, {
     method: "PUT",
     headers: { Authorization: "Bearer owner" },
-    body: JSON.stringify(databaseRules),
+    body: JSON.stringify(rules),
   });
   if (!res.ok) throw new Error(`loading security rules failed: ${await res.text()}`);
-});
+}
+
+beforeAll(() => putRules(databaseRules));
+// The src/net emulator tests share this namespace and rely on its default
+// OPEN rules; restore them so a long-running emulator never leaks the real
+// rules into a later suite.
+afterAll(() => putRules({ rules: { ".read": true, ".write": true } }));
 
 /** Rules-bypassing write (admin token): stands in for a malicious client that
  *  somehow got a forged message past the server, to test the clients' own
@@ -145,15 +151,40 @@ async function dealtBy(dealer: PlayerId): Promise<void> {
   await resetForRematch(db, roomId, "p2", 2);
 }
 
+/**
+ * Really disconnects `seat`'s client the way a dropped connection does:
+ * registers the production presence hook (setupPresence: onDisconnect ->
+ * false), goes offline so the server runs that onDisconnect under the real
+ * rules, waits until the other client sees presence false, then reconnects.
+ * The reconnect does not re-announce presence (refresh/reconnect recovery is
+ * Task 14), so presence stays false and the opponent may claim a FORFEIT,
+ * while this client still receives the resulting events.
+ */
+async function dropConnection(seatDb: Database, seat: PlayerId): Promise<void> {
+  await setupPresence(seatDb, roomId, seat);
+  goOffline(seatDb);
+  const observer = seatDb === db ? db2 : db;
+  await waitFor(
+    async () => expect((await get(ref(observer, `rooms/${roomId}/presence/${seat}`))).val()).toBe(false),
+    { timeout: 5000 },
+  );
+  goOnline(seatDb);
+}
+
 describe("real security rules are enforced in this namespace", () => {
   test("rule-violating writes from the seated clients are rejected", async () => {
     // p2 is the selector in game 1: it may not publish a placementCommit,
-    // nor forfeit on its own behalf.
+    // nor forfeit on its own behalf, nor claim a FORFEIT against a p1 who
+    // is still present.
     await expect(
       publishReveal(db2, roomId, { kind: "placementCommit", by: "p2", handIndex: 0, commitment: "0".repeat(64) }),
     ).rejects.toThrow(/permission.denied/i);
     await expect(publishEvent(db2, roomId, { type: "FORFEIT", by: "p2" })).rejects.toThrow(/permission.denied/i);
-    // ...while a legal write from the same client goes through.
+    await expect(publishEvent(db2, roomId, { type: "FORFEIT", by: "p1" })).rejects.toThrow(/permission.denied/i);
+    // ...while legal writes from the same client go through: once p1 has
+    // really dropped, the same FORFEIT is accepted.
+    await expect(publishRematchVote(db2, roomId, "p2")).resolves.toBeUndefined();
+    await dropConnection(db, "p1");
     await expect(publishEvent(db2, roomId, { type: "FORFEIT", by: "p1" })).resolves.toBeUndefined();
   });
 });
@@ -699,7 +730,7 @@ describe("useMultiplayerGame - timeout", () => {
     expect(() => act(() => p1.result.current.timeout())).not.toThrow();
     expect(p1.result.current.state.phase).not.toBe("result");
 
-    const p2 =renderHook(() => useMultiplayerGame({ db: db2, roomId, you: "p2", gameNumber: 1 }));
+    const p2 = renderHook(() => useMultiplayerGame({ db: db2, roomId, you: "p2", gameNumber: 1 }));
     await waitFor(() => expect(p1.result.current.state.phase).toBe("placing"), { timeout: 5000 });
     await waitFor(() => expect(p1.result.current.state.pendingCard).not.toBeNull(), { timeout: 5000 });
 
@@ -725,6 +756,7 @@ describe("useMultiplayerGame - claimWin (FORFEIT)", () => {
       },
       { timeout: 5000 },
     );
+    await dropConnection(db2, "p2");
     return { p1, p2 };
   }
 
