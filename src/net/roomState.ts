@@ -83,7 +83,10 @@ export function subscribeToGameNumber(
 /**
  * Starts the next game in the same room: clears the event and protocol logs
  * and the rematch votes, flips the dealer role, and sets the new game
- * number and turn — all as one multi-path update.
+ * number and turn — all as one multi-path update. The turn always restarts
+ * at "p1": the placing schedule starts with p1 whoever deals (the dealer only
+ * decides who shuffles). The security rules allow this update only while
+ * both rematch votes are true (checked against the pre-write state).
  */
 export async function resetForRematch(
   db: Database,
@@ -96,7 +99,7 @@ export async function resetForRematch(
     protocol: { dealer: nextDealer },
     rematch: null,
     gameNumber: nextGameNumber,
-    "meta/turn": nextDealer,
+    "meta/turn": "p1",
     "meta/turnStartedAt": serverTimestamp(),
   });
 }

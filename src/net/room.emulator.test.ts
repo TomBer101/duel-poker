@@ -26,7 +26,7 @@ beforeEach(async () => {
 });
 
 describe("createRoom", () => {
-  test("seats the creator as p1 with their uid, marks them present, and sets turn to p1", async () => {
+  test("seats the creator as p1 with their uid, marks them present, sets turn to p1, and announces p1 as dealer", async () => {
     const roomId = await createRoom(db, uid, "Alice", "hunter2");
 
     expect(roomId).toMatch(/^[A-Z0-9]{6}$/);
@@ -36,6 +36,7 @@ describe("createRoom", () => {
     expect(room.presence.p1).toBe(true);
     expect(room.seats.p2).toBeUndefined();
     expect(room.meta.turn).toBe("p1");
+    expect(room.protocol.dealer).toBe("p1");
   });
 });
 

@@ -22,7 +22,8 @@ export async function hashPassword(password: string, roomId: string): Promise<st
 }
 
 /**
- * Creates a room, seats the creator as p1, and marks them present. `uid` is
+ * Creates a room, seats the creator as p1, marks them present, and announces
+ * them as game 1's dealer (`protocol/dealer`). `uid` is
  * the creator's Firebase Auth uid, stored on the seat so security rules can
  * confirm a write actually comes from the player occupying it. `turn` starts
  * at "p1" (the dealer/creator), matching the reducer's initial state.
@@ -50,6 +51,9 @@ export async function createRoom(
   await update(ref(db, `rooms/${roomId}`), {
     meta: { passwordHash, createdAt: serverTimestamp(), turn: "p1" },
     "presence/p1": true,
+    // Game 1's dealer is the creator. Its rule also reads seats/p1/uid, hence
+    // this second step too.
+    "protocol/dealer": "p1",
   });
 
   return roomId;

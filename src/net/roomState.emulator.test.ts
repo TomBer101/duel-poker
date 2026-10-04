@@ -76,7 +76,7 @@ test("incrementScore / subscribeToScore accumulates per player", async () => {
   unsubscribe();
 });
 
-test("resetForRematch clears events/protocol/rematch and sets the next dealer", async () => {
+test("resetForRematch clears events/protocol/rematch, sets the next dealer, and restarts the turn at p1", async () => {
   await publishRematchVote(db, roomId, "p1");
   await publishRematchVote(db, roomId, "p2");
 
@@ -89,5 +89,6 @@ test("resetForRematch clears events/protocol/rematch and sets the next dealer", 
   const gameNumber = await get(ref(db, `rooms/${roomId}/gameNumber`));
   expect(gameNumber.val()).toBe(2);
   const turn = await get(ref(db, `rooms/${roomId}/meta/turn`));
-  expect(turn.val()).toBe("p2");
+  // The placing schedule always starts with p1, whoever deals.
+  expect(turn.val()).toBe("p1");
 });
