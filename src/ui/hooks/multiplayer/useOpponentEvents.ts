@@ -54,7 +54,8 @@ export function useOpponentEvents(ctx: MultiplayerCtx): void {
 
   // Opponent event intake: ONE subscription for the game's lifetime.
   // `onChildAdded` also echoes my own writes (and replays history), so events
-  // by me are ignored. Events with no `by` (REMATCH) belong to their own task.
+  // by me are ignored. Every published event type carries `by` (the security
+  // rules require it); the guard below only drops malformed entries.
   useEffect(
     () =>
       subscribeToEvents(db, roomId, (event) => {
