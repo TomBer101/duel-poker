@@ -12,14 +12,24 @@
             ".validate": "newData.hasChildren(['nick', 'uid']) && newData.child('uid').val() == auth.uid"
           }
         },
-
         "meta": {
           ".write": "auth != null && ((!data.exists() && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid) || (data.exists() && (root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid || root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid)))",
-          "passwordHash": { ".validate": "newData.isString()" },
-          "createdAt": { ".validate": "newData.val() == now || newData.val() == data.val()" },
-          "turn": { ".validate": "newData.val() == 'p1' || newData.val() == 'p2'" }
+          "passwordHash": {
+            ".validate": "newData.isString()"
+          },
+          "createdAt": {
+            ".validate": "newData.val() == now || newData.val() == data.val()"
+          },
+          "turn": {
+            ".validate": "newData.val() == 'p1' || newData.val() == 'p2'"
+          },
+          "turnStartedAt": {
+            ".validate": "newData.val() == now"
+          },
+          "$other": {
+            ".validate": false
+          }
         },
-
         "presence": {
           "p1": {
             ".write": "auth != null && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid"
@@ -28,14 +38,104 @@
             ".write": "auth != null && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid"
           }
         },
-
+        "protocol": {
+          ".write": "auth != null && (root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid || root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) && root.child('rooms').child($roomId).child('rematch/p1').val() == true && root.child('rooms').child($roomId).child('rematch/p2').val() == true && !newData.child('commitments').exists() && !newData.child('reveals').exists() && newData.child('dealer').exists() && newData.child('dealer').val() != data.child('dealer').val()",
+          "dealer": {
+            ".write": "auth != null && !data.exists() && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid && newData.val() == 'p1'",
+            ".validate": "newData.val() == 'p1' || newData.val() == 'p2'"
+          },
+          "commitments": {
+            "dealer": {
+              ".write": "auth != null && !data.exists() && ((root.child('rooms').child($roomId).child('protocol/dealer').val() == 'p1' && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid) || (root.child('rooms').child($roomId).child('protocol/dealer').val() == 'p2' && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid))",
+              ".validate": "newData.hasChildren(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20', '21', '22', '23', '24', '25', '26', '27', '28', '29', '30', '31', '32', '33', '34', '35', '36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46', '47', '48', '49', '50', '51'])",
+              "$i": {
+                ".validate": "$i.matches(/^([0-9]|[1-4][0-9]|5[01])$/) && newData.isString() && newData.val().length == 64 && newData.val().matches(/^[0-9a-f]+$/)"
+              }
+            },
+            "selector": {
+              ".write": "auth != null && !data.exists() && ((root.child('rooms').child($roomId).child('protocol/dealer').val() == 'p1' && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) || (root.child('rooms').child($roomId).child('protocol/dealer').val() == 'p2' && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid))",
+              ".validate": "newData.hasChildren(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20', '21', '22', '23', '24', '25', '26', '27', '28', '29', '30', '31', '32', '33', '34', '35', '36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46', '47', '48', '49', '50', '51'])",
+              "$i": {
+                ".validate": "$i.matches(/^([0-9]|[1-4][0-9]|5[01])$/) && newData.isString() && newData.val().length == 64 && newData.val().matches(/^[0-9a-f]+$/)"
+              }
+            },
+            "$other": {
+              ".validate": false
+            }
+          },
+          "reveals": {
+            "$id": {
+              ".write": "auth != null && !data.exists() && ((newData.child('by').val() == 'p1' && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid) || (newData.child('by').val() == 'p2' && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid)) && ((newData.child('kind').val() == 'position' && ((root.child('rooms').child($roomId).child('protocol/dealer').val() == 'p1' && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) || (root.child('rooms').child($roomId).child('protocol/dealer').val() == 'p2' && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid))) || ((newData.child('kind').val() == 'card' || newData.child('kind').val() == 'placementCommit') && ((root.child('rooms').child($roomId).child('protocol/dealer').val() == 'p1' && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid) || (root.child('rooms').child($roomId).child('protocol/dealer').val() == 'p2' && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid))) || newData.child('kind').val() == 'placementReveal')",
+              ".validate": "newData.hasChildren(['kind', 'by']) && ((newData.child('kind').val() == 'position' && newData.hasChildren(['drawIndex', 'position', 'saltHex'])) || (newData.child('kind').val() == 'card' && newData.hasChildren(['position', 'cardId', 'saltHex'])) || (newData.child('kind').val() == 'placementCommit' && newData.hasChildren(['handIndex', 'commitment'])) || newData.child('kind').val() == 'placementReveal')",
+              "kind": {
+                ".validate": "newData.isString()"
+              },
+              "by": {
+                ".validate": "newData.isString()"
+              },
+              "drawIndex": {
+                ".validate": "newData.isNumber()"
+              },
+              "position": {
+                ".validate": "newData.isNumber()"
+              },
+              "handIndex": {
+                ".validate": "newData.isNumber()"
+              },
+              "saltHex": {
+                ".validate": "newData.isString()"
+              },
+              "cardId": {
+                ".validate": "newData.isString()"
+              },
+              "commitment": {
+                ".validate": "newData.isString() && newData.val().length == 64 && newData.val().matches(/^[0-9a-f]+$/)"
+              },
+              "cards": {
+                ".validate": "newData.hasChildren()"
+              },
+              "$other": {
+                ".validate": false
+              }
+            }
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
         "events": {
+          ".write": "auth != null && (root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid || root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) && root.child('rooms').child($roomId).child('rematch/p1').val() == true && root.child('rooms').child($roomId).child('rematch/p2').val() == true && !newData.exists()",
           "$pushId": {
-            ".write": "auth != null && !data.exists() && (((newData.child('type').val() == 'DEAL' || newData.child('type').val() == 'ADVANCE_REVEAL' || newData.child('type').val() == 'REMATCH') && (root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid || root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid)) || (newData.child('type').val() == 'TIMEOUT' && ((newData.child('by').val() == 'p1' && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) || (newData.child('by').val() == 'p2' && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid))) || ((newData.child('type').val() == 'DRAW' || newData.child('type').val() == 'END_TURN' || newData.child('type').val() == 'REPLACE_DRAW' || newData.child('type').val() == 'REPLACE') && newData.child('by').val() == root.child('rooms').child($roomId).child('meta/turn').val() && ((newData.child('by').val() == 'p1' && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid) || (newData.child('by').val() == 'p2' && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid))))"
+            ".write": "auth != null && !data.exists() && (((newData.child('type').val() == 'END_TURN' || newData.child('type').val() == 'REPLACE') && newData.child('by').val() == root.child('rooms').child($roomId).child('meta/turn').val() && ((newData.child('by').val() == 'p1' && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid) || (newData.child('by').val() == 'p2' && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid))) || ((newData.child('type').val() == 'TIMEOUT' || newData.child('type').val() == 'TIMEOUT_HIDDEN') && newData.child('by').val() == root.child('rooms').child($roomId).child('meta/turn').val() && ((newData.child('by').val() == 'p1' && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) || (newData.child('by').val() == 'p2' && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid))) || (newData.child('type').val() == 'FORFEIT' && ((newData.child('by').val() == 'p1' && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) || (newData.child('by').val() == 'p2' && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid))))"
           },
           ".read": "auth != null"
         },
-
+        "rematch": {
+          ".write": "auth != null && (root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid || root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) && root.child('rooms').child($roomId).child('rematch/p1').val() == true && root.child('rooms').child($roomId).child('rematch/p2').val() == true && !newData.exists()",
+          "p1": {
+            ".write": "auth != null && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid && newData.val() == true"
+          },
+          "p2": {
+            ".write": "auth != null && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid && newData.val() == true"
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
+        "gameNumber": {
+          ".write": "auth != null && (root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid || root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) && root.child('rooms').child($roomId).child('rematch/p1').val() == true && root.child('rooms').child($roomId).child('rematch/p2').val() == true && newData.exists()",
+          ".validate": "newData.isNumber() && ((data.exists() && newData.val() == data.val() + 1) || (!data.exists() && newData.val() == 2))"
+        },
+        "score": {
+          "p1": {
+            ".write": "auth != null && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid && newData.exists()",
+            ".validate": "newData.isNumber() && ((data.exists() && newData.val() == data.val() + 1) || (!data.exists() && newData.val() == 1))"
+          },
+          "p2": {
+            ".write": "auth != null && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid && newData.exists()",
+            ".validate": "newData.isNumber() && ((data.exists() && newData.val() == data.val() + 1) || (!data.exists() && newData.val() == 1))"
+          }
+        },
         ".read": "auth != null"
       }
     }
