@@ -2,7 +2,7 @@ import { CARDS_PER_HAND } from "../../../engine/constants";
 import { otherPlayer } from "../../../engine/deck";
 import { isFaceDownPlacement } from "../../../engine/placement";
 import type { Card, GameEvent } from "../../../engine/types";
-import { generateSalt } from "../../../crypto/commitment";
+import { derivePlacementSalt } from "../../../crypto/protocol";
 import { commitPlacement } from "../../../crypto/protocolController";
 import { isFaceDownDraw, validReplaceHand } from "../../../crypto/drawSchedule";
 import { publishEvent, publishReveal } from "../../../net/sync";
@@ -28,9 +28,9 @@ export async function commitOwnFaceDownCard(
   card: Card,
   drawIndex: number,
 ): Promise<void> {
-  const { db, roomId, you, refs } = ctx;
+  const { db, roomId, you, refs, dealerState } = ctx;
   const { pendingPlacementSalts, ownSlotDraw } = refs;
-  const salt = generateSalt();
+  const salt = await derivePlacementSalt(dealerState.current!.seed, handIndex, drawIndex);
   const commitment = await commitPlacement(card, handIndex, salt);
   await publishReveal(db, roomId, { kind: "placementCommit", by: you, handIndex, commitment });
   pendingPlacementSalts.current.set(handIndex, salt);
@@ -39,7 +39,7 @@ export async function commitOwnFaceDownCard(
 
 /** Replace my 5th card in `handIndex` with my pending replace draw, or pass (null). */
 export function replace(ctx: MultiplayerCtx, handIndex: number | null): void {
-  const { db, roomId, you, role, state, dispatch, recordViolation, refs } = ctx;
+  const { db, roomId, you, role, state, dispatch, recordViolation, refs, dealerState } = ctx;
   const { pendingPlacementSalts, ownSlotDraw, replacedForDraw } = refs;
   const card = state.pendingCard;
   if (state.phase !== "replace" || state.turn !== you || !card) return;
@@ -56,7 +56,7 @@ export function replace(ctx: MultiplayerCtx, handIndex: number | null): void {
     // A hidden swap needs a fresh commitment (latest per hand wins). The
     // selector's cards are never hidden from the dealer, so only the dealer commits.
     if (role !== "dealer" || handIndex === null) return;
-    const salt = generateSalt();
+    const salt = await derivePlacementSalt(dealerState.current!.seed, handIndex, slotDraw);
     const commitment = await commitPlacement(card, handIndex, salt);
     await publishReveal(db, roomId, { kind: "placementCommit", by: you, handIndex, commitment });
     pendingPlacementSalts.current.set(handIndex, salt);
@@ -169,7 +169,7 @@ export function playAgain(ctx: MultiplayerCtx): void {
  * `legalHands` is the root's render-time value (same snapshot as `ctx.state`).
  */
 export function placePending(ctx: MultiplayerCtx, legalHands: number[], handIndex: number): void {
-  const { db, roomId, you, role, state, dispatch, recordViolation, warnOnce, refs } = ctx;
+  const { db, roomId, you, role, state, dispatch, recordViolation, warnOnce, refs, dealerState } = ctx;
   const { pendingPlacementSalts, ownSlotDraw, placedForDraw, timedOutOwnHiddenForDraw } = refs;
   const card = state.pendingCard;
   if (state.phase !== "placing" || state.turn !== you || !card) return;
@@ -190,7 +190,7 @@ export function placePending(ctx: MultiplayerCtx, legalHands: number[], handInde
   const placingDraw = state.drawCount - 1; // the draw this placed card came from
   const commitFirst = async () => {
     if (role !== "dealer" || !faceDown) return;
-    const salt = generateSalt();
+    const salt = await derivePlacementSalt(dealerState.current!.seed, handIndex, placingDraw);
     const commitment = await commitPlacement(card, handIndex, salt);
     await publishReveal(db, roomId, { kind: "placementCommit", by: you, handIndex, commitment });
     pendingPlacementSalts.current.set(handIndex, salt);
