@@ -2683,6 +2683,8 @@ Out of scope: session score (Task 13), presence (Task 14).
 
 ### Task 13: Session score
 
+> **CARRY-OVER from the Task 12a security review (2026-10-04).** The rules cannot see the game result, so a player can raise their own `score` without limit (one write per point). Cap it: at most ONE increment per game. Add a per-game marker written in the same update (for example `scoredGame` = the current game number) and validate in the rules that the increment is only allowed when `scoredGame` differs from the current game number; extend the rules table (allowed first increment, denied second increment in the same game, allowed again after a rematch bumps gameNumber). Claiming a lost game as a win remains possible without a backend; accepted.
+
 **Files:**
 - Modify: `src/ui/screens/GameScreen.tsx`
 - Modify: `src/ui/components/ResultOverlay.tsx` (accept optional session score)
@@ -2801,6 +2803,8 @@ git commit -m "feat(ui): session score tracked and shown on the result overlay"
 ---
 
 ### Task 14: Refresh recovery
+
+> **ADDITIONAL CARRY-OVERS (2026-10-04).** (5) With the real rules, republishing the same commitments after a refresh is now DENIED as a second write (write-once), which leaves an unhandled rejection in the seed/commitments IIFE in `useShuffle.ts`: recovery must detect that its commitments are already published (read them back) and reuse its stored seed instead of republishing, and the IIFE must have a catch. (6) Presence: the real FORFEIT rule now requires the forfeiting seat's presence to be `false`, so the presence re-arm on reconnect (carry-over 2) is also what prevents a live, reconnected player from being forfeited.
 
 > **CARRY-OVERS (2026-10-03), mandatory scope for this task.** (1) The hook now lives in `src/ui/hooks/multiplayer/` (see Task 10d's map): put recovery in its own `useRecovery.ts` called from the root, not inlined. (2) **Presence must be (re)established on the game page and survive reconnects.** Today `setupPresence` (`net/sync.ts`) arms `onDisconnect(false)` once and writes `true` once, never re-arms on reconnect, and is only called from the lobby. After a refresh of the game page or any connection drop, that player's presence stays `false`: the opponent's DisconnectOverlay never clears and they can claim a win against a live player. Fix: call setupPresence when the game page mounts, and re-arm on Firebase `.info/connected` becoming true (add a `subscribeToConnection`-style helper in `net/` with an emulator test; keep `net/` the only firebase importer). (3) The FORFEIT echo rule ignores the claimer's own FORFEIT event, so after a refresh the claimer replaying history would never reach `result`: replay must apply FORFEIT for the claimer too (dedupe replayed events by push key). (4) Dedupe of replayed events by push key is required (see the TODO in `useOpponentEvents.ts`).
 
@@ -3082,6 +3086,25 @@ git commit -m "feat(ui): protocol violation screen halts the game on a failed ve
 ```
 
 ---
+
+### Task 16: Turn integrity (timeouts, turn flips, publish-before-apply)
+
+**Source:** adversarial review of Task 12a (2026-10-04). These are exploitable with the rules as they stand after 12a and must be done BEFORE the rules are treated as secure or deployed.
+
+1. **Instant forged timeouts.** Today a player can write `TIMEOUT` / `TIMEOUT_HIDDEN` against the opponent at the very start of the opponent's turn (rules look at no elapsed time); three forfeit the opponent and the card on a forged `TIMEOUT` is injected into their hand. Add a rules gate: `now >= meta/turnStartedAt + 87000` (90s limit minus a small grace) on TIMEOUT and TIMEOUT_HIDDEN. The grace is only safe if the CLIENT corrects its clock: `useRemoteTimer` compares local `Date.now()` with a server timestamp and has no `.info/serverTimeOffset`; add the offset (new `net/` helper with an emulator test) so the client's countdown matches the server's clock to within about half a round trip.
+2. **Free re-stamping of `meta/turnStartedAt`.** Any seated player can rewrite it at any time, so the active player can stall forever (and re-anchor the timer). Rule: the active seat may only stamp together with a turn flip; the non-active seat may stamp any time (that only gives the opponent more time). Today the stamp is a separate write after the event (`publishTurnStarted` after `publishEvent`): move it INTO `publishEvent`'s multi-path update (same update as the event and `meta/turn`), and make only the non-active seat stamp after DEAL (`useOpeningDeal` currently has both seats stamp).
+3. **`meta/turn` is freely writable by either seat** (pre-existing), which defeats the END_TURN/REPLACE turn gate: a cheater sets `meta/turn` to their own seat, the opponent's move is denied but already applied locally (silent desync), then the cheater reports a TIMEOUT. Tighten: `meta/turn` may only FLIP to the other seat, and only in the same update as a new turn event (tie them with a `meta/lastEvent` push key that must name an event created in the same update; every turn event must flip). The reviewer proposed concrete expressions using `newData.parent()` (see `task-12a` review notes in the ledger); the emulator must test the exact multi-path shape, and the semantics of `newData.parent()` in a multi-path update on the PRODUCTION database must be smoke-tested after deploy (the emulator was more lenient than production once before).
+4. **Dispatch-before-publish desync.** Every move is dispatched locally before it is published (`myMoves.ts`), so any rules denial (including a legitimate race between a late END_TURN and an on-time TIMEOUT report) becomes a permanent silent desync. Change to publish-then-apply (apply the local dispatch when the write is accepted; on `permission_denied` do not apply and surface a clear error), or equivalent roll-back, keeping the opponent-event intake as the single applier where possible.
+5. **Test seam:** the emulator hook tests call `timeout()` immediately; add an admin-REST write that backdates `turnStartedAt` so the time gate can be exercised, plus a table of rules cases (too early denied, on time allowed, re-stamp by the active seat denied, flip without an event denied, event without a flip denied, `meta/turn` set arbitrarily denied). Turn the two `it.todo` entries Task 12a left in `rules.emulator.test.ts` into real tests.
+
+### Task 17: Client integrity fixes
+
+**Source:** adversarial review of Task 12a (2026-10-04). Client bugs that rules cannot fix.
+
+1. **The dealer leaks future cards.** In `src/ui/hooks/multiplayer/useShuffle.ts` (the reveals subscription / `answerWithCard`), the dealer answers EVERY position reveal with the matching card reveal: even when the reveal failed verification, and without checking that the draw index is due. A cheating selector can publish valid position reveals for draw indices 10..51 right after the deal and learn every future face-up card for both players, with no violation raised. Fix: answer only when the position reveal VERIFIED and `drawIndex < 10 || drawIndex === state.drawCount` (the draw that is actually due); record a violation for an early or unverified reveal. Add emulator tests with a forged early reveal (admin-REST injection) proving the dealer stays silent and a violation is recorded.
+2. **Illegal `handIndex` crashes the opponent's reducer.** `handleOpponentEndTurn` accepts an `END_TURN` whose `handIndex` is out of range / not legal when its `faceDown` flag matches the computed expectation (an illegal index makes `expectedFaceDown` false, so a forged `faceDown:false` passes) and then the reducer assertion throws inside `useReducer`, crashing the client instead of recording a violation. Fix: check `legal.includes(event.handIndex)` explicitly and record a violation before dispatching; same for REPLACE targets. Wrap opponent-event dispatch in try/catch recording a violation for any reducer throw.
+3. **A violation should be a loss for the violator.** Today any junk reveal records a violation that halts the game, so a player who is losing can halt it with one forged message. Decide (and implement with Task 15's violation screen) that the violating seat forfeits when the violation can be attributed to the opponent's message (`by`), instead of halting both players.
+4. A `TIMEOUT` written outside the placing phase stalls the opponent's queue: drop-and-record-violation instead.
 
 ## After all tasks
 
