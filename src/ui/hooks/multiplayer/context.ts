@@ -48,6 +48,9 @@ export type SharedRefs = {
   timedOutOwnHiddenForDraw: RefObject<number | null>;
   // My rematch vote is published (or in flight) for this game: once per mount.
   rematchVoted: RefObject<boolean>;
+  // Push keys of events already applied (or being published by me): the
+  // intake applies every other event in the log exactly once.
+  seenKeys: RefObject<Set<string>>;
 };
 
 /** Everything a sub-hook needs. Rebuilt by the root every render (latest `state`). */

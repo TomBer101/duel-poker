@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { get, ref, type Database } from "firebase/database";
 import { connectToEmulators, createFirebaseClient, signInAnonymous } from "./firebase";
 import {
+  newEventKey,
   publishEvent,
   setupPresence,
   subscribeToEvents,
@@ -76,6 +77,22 @@ describe("publishEvent / subscribeToEvents", () => {
     expect(received[0]).toEqual({ type: "ADVANCE_REVEAL" });
     expect(received[1]).toEqual({ type: "REMATCH", dealer: "p1" });
 
+    unsubscribe();
+  });
+
+  test("publishEvent writes under a supplied key and returns it; subscribers receive that key", async () => {
+    const keys: string[] = [];
+    const unsubscribe = subscribeToEvents(db, roomId, (_event, key) => {
+      keys.push(key);
+    });
+    const supplied = newEventKey(db, roomId);
+    expect(await publishEvent(db, roomId, { type: "ADVANCE_REVEAL" }, undefined, supplied)).toBe(supplied);
+    const generated = await publishEvent(db, roomId, { type: "ADVANCE_REVEAL" });
+    expect(generated).not.toBe(supplied);
+
+    await vi.waitFor(() => expect(keys).toEqual([supplied, generated]));
+    const snapshot = await get(ref(db, `rooms/${roomId}/events/${supplied}`));
+    expect(snapshot.val()).toEqual({ type: "ADVANCE_REVEAL" });
     unsubscribe();
   });
 });

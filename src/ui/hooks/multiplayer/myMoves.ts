@@ -5,13 +5,23 @@ import type { Card, GameEvent } from "../../../engine/types";
 import { derivePlacementSalt } from "../../../crypto/protocol";
 import { commitPlacement } from "../../../crypto/protocolController";
 import { isFaceDownDraw, validReplaceHand } from "../../../crypto/drawSchedule";
-import { publishEvent, publishReveal } from "../../../net/sync";
+import { newEventKey, publishEvent, publishReveal } from "../../../net/sync";
 import { publishRematchVote, publishTurnStarted } from "../../../net/roomState";
 import type { MultiplayerCtx } from "./context";
 
 // My own moves: plain functions over the render's ctx (no effects). Each reads
 // the `state` snapshot of the render that built `ctx`, exactly like the
 // closures they were before the split.
+
+/**
+ * A fresh key for my next event, registered as seen BEFORE the write: Firebase
+ * raises optimistic local events, so the echo can arrive before the ack.
+ */
+function ownEventKey(ctx: MultiplayerCtx): string {
+  const key = newEventKey(ctx.db, ctx.roomId);
+  ctx.refs.seenKeys.current.add(key);
+  return key;
+}
 
 /**
  * Dealer-only: hashes and publishes a `placementCommit` for a known
@@ -72,7 +82,7 @@ export function replace(ctx: MultiplayerCtx, handIndex: number | null): void {
         replacedForDraw.current = null;
         return;
       }
-      publishEvent(db, roomId, event, otherPlayer(you))
+      publishEvent(db, roomId, event, otherPlayer(you), ownEventKey(ctx))
         .then(() => (lastReplacer ? undefined : publishTurnStarted(db, roomId)))
         .catch((err: unknown) => {
           console.error("[useMultiplayerGame] failed to publish REPLACE", err);
@@ -120,7 +130,7 @@ export function timeout(ctx: MultiplayerCtx): void {
     timedOutForDraw.current = null;
     return;
   }
-  publishEvent(db, roomId, event, you)
+  publishEvent(db, roomId, event, you, ownEventKey(ctx))
     .then(() => publishTurnStarted(db, roomId))
     .catch((err: unknown) => {
       console.error("[useMultiplayerGame] failed to publish TIMEOUT", err);
@@ -144,7 +154,7 @@ export function claimWin(ctx: MultiplayerCtx): void {
     recordViolation(`local FORFEIT failed: ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
-  publishEvent(db, roomId, event).catch((err: unknown) => {
+  publishEvent(db, roomId, event, undefined, ownEventKey(ctx)).catch((err: unknown) => {
     console.error("[useMultiplayerGame] failed to publish FORFEIT", err);
   });
 }
@@ -207,7 +217,7 @@ export function placePending(ctx: MultiplayerCtx, legalHands: number[], handInde
         placedForDraw.current = null;
         return;
       }
-      publishEvent(db, roomId, event, otherPlayer(you))
+      publishEvent(db, roomId, event, otherPlayer(you), ownEventKey(ctx))
         .then(() => publishTurnStarted(db, roomId))
         .catch((err: unknown) => {
           console.error("[useMultiplayerGame] failed to publish END_TURN", err);

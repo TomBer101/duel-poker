@@ -15,34 +15,47 @@ import type { GameEvent, PlayerId } from "../engine/types";
  * (chronologically ordered, collision-free — no two clients can ever
  * generate the same one, so no "next index" arithmetic is needed) and —
  * when the event changes whose turn it is — atomically updates
- * /rooms/{roomId}/meta/turn in the same multi-path write.
+ * /rooms/{roomId}/meta/turn in the same multi-path write. Writes under `key`
+ * when given (see {@link newEventKey}) and resolves to the key used.
  */
 export async function publishEvent(
   db: Database,
   roomId: string,
   event: GameEvent,
   nextTurn?: PlayerId,
-): Promise<void> {
-  const eventRef = push(ref(db, `rooms/${roomId}/events`));
-
+  key: string = newEventKey(db, roomId),
+): Promise<string> {
   const updates: Record<string, unknown> = {
-    [`rooms/${roomId}/events/${eventRef.key}`]: event,
+    [`rooms/${roomId}/events/${key}`]: event,
   };
   if (nextTurn) {
     updates[`rooms/${roomId}/meta/turn`] = nextTurn;
   }
   await update(ref(db), updates);
+  return key;
 }
 
-/** Fires `callback` once per event, in append order, including ones already present. */
+/**
+ * A fresh push key for an event, generated locally (no write). Lets a caller
+ * know an event's identity BEFORE publishing it, so it can recognise the
+ * subscription's echo of its own write (which may arrive before the ack).
+ */
+export function newEventKey(db: Database, roomId: string): string {
+  return push(ref(db, `rooms/${roomId}/events`)).key!;
+}
+
+/**
+ * Fires `callback` once per event with its push key, in append order,
+ * including ones already present.
+ */
 export function subscribeToEvents(
   db: Database,
   roomId: string,
-  callback: (event: GameEvent) => void,
+  callback: (event: GameEvent, key: string) => void,
 ): () => void {
   const eventsRef = ref(db, `rooms/${roomId}/events`);
   const unsubscribe = onChildAdded(eventsRef, (snapshot) => {
-    callback(snapshot.val() as GameEvent);
+    callback(snapshot.val() as GameEvent, snapshot.key!);
   });
   return unsubscribe;
 }

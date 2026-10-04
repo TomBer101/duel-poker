@@ -186,7 +186,7 @@ describe("real security rules are enforced in this namespace", () => {
     // really dropped, the same FORFEIT is accepted.
     await expect(publishRematchVote(db2, roomId, "p2")).resolves.toBeUndefined();
     await dropConnection(db, "p1");
-    await expect(publishEvent(db2, roomId, { type: "FORFEIT", by: "p1" })).resolves.toBeUndefined();
+    await expect(publishEvent(db2, roomId, { type: "FORFEIT", by: "p1" })).resolves.toEqual(expect.any(String));
   });
 });
 

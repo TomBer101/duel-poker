@@ -67,6 +67,7 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
     timedOutForDraw: useRef<number | null>(null),
     timedOutOwnHiddenForDraw: useRef<number | null>(null),
     rematchVoted: useRef(false),
+    seenKeys: useRef<Set<string>>(new Set()),
   };
   const ctx: MultiplayerCtx = { db, roomId, you, gameNumber, state, dispatch, ...protocolHandle, ...shuffle, refs };
 

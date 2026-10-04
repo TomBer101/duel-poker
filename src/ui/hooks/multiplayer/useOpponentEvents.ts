@@ -1,7 +1,7 @@
 import { useEffect, useRef, type RefObject } from "react";
 import { CARDS_PER_HAND } from "../../../engine/constants";
 import { getAutoPlaceIndex, getLegalHands, isFaceDownPlacement } from "../../../engine/placement";
-import type { GameEvent, PlayerId } from "../../../engine/types";
+import type { GameEvent, GameState } from "../../../engine/types";
 import { recordHiddenDraw } from "../../../crypto/protocolController";
 import { isFaceDownDraw, replaceDrawIndex, validReplaceHand } from "../../../crypto/drawSchedule";
 import { subscribeToEvents } from "../../../net/sync";
@@ -10,120 +10,125 @@ import { commitOwnFaceDownCard } from "./myMoves";
 
 // Bound on waiting for MY OWN position reveal to land before falling back to
 // a literal card-less TIMEOUT_HIDDEN for my own hidden turn (see
-// handleOpponentTimeout) — an ordinary async round trip, not tied
+// handleTimeout) — an ordinary async round trip, not tied
 // to the 60s timeout window, so a few short retries cover it comfortably.
 const MAX_OWN_HIDDEN_TIMEOUT_RETRIES = 3;
 const OWN_HIDDEN_TIMEOUT_RETRY_DELAY_MS = 300;
 
-/** The opponent's not-yet-applied events (FIFO); handlers inspect only the head. */
-type Queue = RefObject<GameEvent[]>;
-type Deadline = RefObject<{ drawIndex: number; at: number } | null>;
+/** One logged event (with its push key) not yet applied locally. */
+export type Queued = { key: string; event: GameEvent };
+/** The not-yet-applied events (FIFO, log order); handlers inspect only the head. */
+type Queue = RefObject<Queued[]>;
+export type Deadline = RefObject<{ drawIndex: number; at: number } | null>;
 type TimeoutEvent = Extract<GameEvent, { type: "TIMEOUT" | "TIMEOUT_HIDDEN" }>;
 type ForfeitEvent = Extract<GameEvent, { type: "FORFEIT" }>;
 type EndTurnEvent = Extract<GameEvent, { type: "END_TURN" }>;
+type ReplaceEvent = Extract<GameEvent, { type: "REPLACE" }>;
 
 /**
- * True when `event` (which has a `by`) is my own write echoed back by the
- * subscription. Inverted for TIMEOUT/TIMEOUT_HIDDEN/FORFEIT: per spec only the
- * NON-active player writes them, so `event.by` names the timed-out /
- * disconnected player, not the sender. On that player's own client
- * `event.by === you` yet the opponent wrote it, so it must be applied; the
- * sender's echo has `event.by !== you`. Every other type is `event.by === you`.
+ * Subscription intake, key-deduped: every event in the log is queued exactly
+ * once, whoever authored it. A key already in `seen` is either a duplicate
+ * delivery or my own live write (registered before publishing, applied
+ * locally on the ack), so it is skipped. Every published event type carries
+ * `by` (the security rules require it); anything else is dropped as malformed.
+ * Returns true when the event was queued.
  */
-export function isOwnEcho(event: GameEvent & { by: PlayerId }, you: PlayerId): boolean {
-  return event.type === "TIMEOUT" || event.type === "TIMEOUT_HIDDEN" || event.type === "FORFEIT"
-    ? event.by !== you
-    : event.by === you;
+export function enqueueOnce(seen: Set<string>, queue: Queued[], event: GameEvent, key: string): boolean {
+  if (seen.has(key)) return false;
+  seen.add(key);
+  if (!("by" in event)) return false;
+  queue.push({ key, event });
+  return true;
 }
 
 /**
- * Opponent event intake: the Firebase subscription feeding a FIFO queue, and
- * the effect that applies (shift + dispatch), waits on (leave queued), or
- * rejects (shift + violation) the head of that queue.
+ * Event intake: the Firebase subscription feeding a FIFO queue, and the effect
+ * that applies (shift + dispatch), waits on (leave queued), or rejects
+ * (shift + violation) the head of that queue. The log is the source of truth:
+ * on mount the subscription replays the whole history through the same queue,
+ * so a fresh instance rebuilds my own moves too (catch-up).
  */
 export function useOpponentEvents(ctx: MultiplayerCtx): void {
-  const { db, roomId, you, role, bumpTick, warnOnce } = ctx;
-  const opponentEvents = useRef<GameEvent[]>([]);
+  const { db, roomId, bumpTick, refs } = ctx;
+  const queue = useRef<Queued[]>([]);
   // Bounded wait for the "my own position reveal hasn't landed yet" branch
-  // of handleOpponentTimeout: a wall-clock deadline (NOT a per-effect-run
+  // of handleTimeout: a wall-clock deadline (NOT a per-effect-run
   // counter — the intake effect has no dependency array and can rerun many
   // times within the same millisecond as unrelated state settles, which would
   // exhaust a naive invocation counter almost instantly regardless of real
   // elapsed time). Reset whenever the draw index it's tracking changes.
   const ownHiddenTimeoutDeadline = useRef<{ drawIndex: number; at: number } | null>(null);
 
-  // Opponent event intake: ONE subscription for the game's lifetime.
-  // `onChildAdded` also echoes my own writes (and replays history), so events
-  // by me are ignored. Every published event type carries `by` (the security
-  // rules require it); the guard below only drops malformed entries.
+  // ONE subscription for the game's lifetime; `onChildAdded` replays history
+  // and echoes my own writes, both deduped by push key in enqueueOnce.
   useEffect(
     () =>
-      subscribeToEvents(db, roomId, (event) => {
-        if (!("by" in event)) return;
-        if (isOwnEcho(event, you)) return;
-        opponentEvents.current.push(event);
-        bumpTick();
+      subscribeToEvents(db, roomId, (event, key) => {
+        if (enqueueOnce(refs.seenKeys.current, queue.current, event, key)) bumpTick();
       }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- bumpTick only touches state setters and a ref (stable in effect); deps unchanged from the pre-split hook
-    [db, roomId, you],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- bumpTick only touches state setters and a ref, refs are stable; deps unchanged from the pre-split hook
+    [db, roomId],
   );
 
-  // TODO(Task 14, refresh recovery): events replayed from history are not
-  // deduped by push key; a remount resets every ref so this is latent today.
-
-  // Apply the head of the opponent queue, at most one event per run; the
-  // dispatch re-renders, which re-runs this effect for the next one. No dep
-  // array: it must re-check after every render/tick, since the card an END_TURN
-  // waits on can resolve after the event itself arrived.
-  useEffect(() => {
-    if (!role) return;
-    const event = opponentEvents.current[0];
-    if (!event) return;
-    if (event.type === "REPLACE") {
-      handleOpponentReplace(ctx, opponentEvents, event.by, event.handIndex);
-    } else if (event.type === "TIMEOUT" || event.type === "TIMEOUT_HIDDEN") {
-      handleOpponentTimeout(ctx, opponentEvents, ownHiddenTimeoutDeadline, event);
-    } else if (event.type === "END_TURN") {
-      handleOpponentEndTurn(ctx, opponentEvents, event);
-    } else if (event.type === "FORFEIT") {
-      handleOpponentForfeit(ctx, opponentEvents, event);
-    } else {
-      // Deliberate FIFO blocking: other opponent events (rematch, etc.) are
-      // handled by later tasks. Until then they stall the queue, so say so
-      // once instead of hanging silently.
-      warnOnce(`blocked:${event.type}`, `opponent event ${event.type} is not handled yet; queue blocked`);
-    }
-  });
+  // Apply the head of the queue, at most one event per run; the dispatch
+  // re-renders, which re-runs this effect for the next one. No dep array: it
+  // must re-check after every render/tick, since the card an END_TURN waits on
+  // can resolve after the event itself arrived.
+  useEffect(() => applyHead(ctx, queue, ownHiddenTimeoutDeadline));
 }
 
-function handleOpponentReplace(
-  ctx: MultiplayerCtx,
-  opponentEvents: Queue,
-  by: PlayerId,
-  rawHandIndex: number | null | undefined,
-): void {
-  const { role, state, dispatch, updateProtocol, recordViolation } = ctx;
-  const fail = (message: string) => {
-    console.warn(`[useMultiplayerGame] ${message}`);
-    opponentEvents.current.shift();
-    recordViolation(message);
-  };
-  // Still catching up to my own last dispatch: wait for it, don't drop.
+/**
+ * Applies, waits on or rejects the queue head. Author: END_TURN/REPLACE are
+ * written by `by`; TIMEOUT/TIMEOUT_HIDDEN/FORFEIT name the AFFECTED player in
+ * `by` and are written by the other seat (the rules enforce both).
+ */
+export function applyHead(ctx: MultiplayerCtx, queue: Queue, deadline: Deadline): void {
+  if (!ctx.role) return;
+  const event = queue.current[0]?.event;
+  if (!event) return;
+  if (event.type === "REPLACE") {
+    handleReplace(ctx, queue, event);
+  } else if (event.type === "TIMEOUT" || event.type === "TIMEOUT_HIDDEN") {
+    handleTimeout(ctx, queue, deadline, event);
+  } else if (event.type === "END_TURN") {
+    handleEndTurn(ctx, queue, event);
+  } else if (event.type === "FORFEIT") {
+    handleForfeit(ctx, queue, event);
+  } else {
+    // Deliberate FIFO blocking: other event types are never published by
+    // this client. They stall the queue, so say so once instead of hanging
+    // silently.
+    ctx.warnOnce(`blocked:${event.type}`, `event ${event.type} is not handled; queue blocked`);
+  }
+}
+
+/** Drops the head and records why (a protocol violation). */
+function reject(ctx: MultiplayerCtx, queue: Queue, message: string): void {
+  console.warn(`[useMultiplayerGame] ${message}`);
+  queue.current.shift();
+  ctx.recordViolation(message);
+}
+
+function handleReplace(ctx: MultiplayerCtx, queue: Queue, event: ReplaceEvent): void {
+  const { you, role, state, dispatch, updateProtocol, refs } = ctx;
+  const { by } = event;
+  const who = by === you ? "own" : "opponent";
+  // Still catching up to the end of the placing phase: wait, don't drop.
   if (state.phase === "placing") return;
   if (state.phase !== "replace" || state.turn !== by) {
-    return fail(`dropped opponent REPLACE: local phase "${state.phase}", turn ${state.turn}, expected turn ${by}`);
+    return reject(ctx, queue, `dropped ${who} REPLACE: local phase "${state.phase}", turn ${state.turn}, expected turn ${by}`);
   }
-  const handIndex = validReplaceHand(rawHandIndex);
-  if (handIndex === "invalid") return fail(`opponent REPLACE has invalid handIndex ${String(rawHandIndex)}`);
+  const handIndex = validReplaceHand(event.handIndex);
+  if (handIndex === "invalid") return reject(ctx, queue, `${who} REPLACE has invalid handIndex ${String(event.handIndex)}`);
   if (handIndex !== null && state.hands[by][handIndex].cards[CARDS_PER_HAND - 1]?.faceUp !== false) {
-    return fail(`opponent REPLACE targets hand ${handIndex} without a face-down 5th card`);
+    return reject(ctx, queue, `${who} REPLACE targets hand ${handIndex} without a face-down 5th card`);
   }
-  if (role === "selector") {
+  if (by !== you && role === "selector") {
     // Opponent is the dealer: its replace draw is secret (REPLACE_HIDDEN).
     if (state.pendingCard !== null || state.drawCount !== replaceDrawIndex(by)) {
-      return fail(`opponent REPLACE disagrees with local draw state (draw ${state.drawCount})`);
+      return reject(ctx, queue, `opponent REPLACE disagrees with local draw state (draw ${state.drawCount})`);
     }
-    opponentEvents.current.shift();
+    queue.current.shift();
     if (handIndex !== null) {
       const drawIndex = state.drawCount;
       updateProtocol("hidden swap draw", (cur) => recordHiddenDraw(cur, handIndex, drawIndex));
@@ -131,34 +136,34 @@ function handleOpponentReplace(
     dispatch({ type: "REPLACE_HIDDEN", by, handIndex });
     return;
   }
-  // Opponent is the selector: wait for its REPLACE_DRAW to resolve, then apply.
+  // The selector's REPLACE, or my own (catch-up): wait for the REPLACE_DRAW
+  // (my own secret one, as dealer, resolves from my deck), then apply.
   if (state.pendingCard === null) return;
-  if (state.drawCount - 1 !== replaceDrawIndex(by)) {
-    return fail(`opponent REPLACE disagrees with local draw index (draw ${state.drawCount - 1})`);
+  const drawIndex = state.drawCount - 1;
+  if (drawIndex !== replaceDrawIndex(by)) {
+    return reject(ctx, queue, `${who} REPLACE disagrees with local draw index (draw ${drawIndex})`);
   }
-  opponentEvents.current.shift();
+  queue.current.shift();
   dispatch({ type: "REPLACE", by, handIndex });
+  // My own hidden swap: rebuild the bookkeeping the live path recorded (its
+  // placementCommit is already in the log, so nothing is published).
+  if (by === you && role === "dealer" && handIndex !== null) refs.ownSlotDraw.current.set(handIndex, drawIndex);
 }
 
-function handleOpponentTimeout(
-  ctx: MultiplayerCtx,
-  opponentEvents: Queue,
-  ownHiddenTimeoutDeadline: Deadline,
-  event: TimeoutEvent,
-): void {
+function handleTimeout(ctx: MultiplayerCtx, queue: Queue, deadline: Deadline, event: TimeoutEvent): void {
   const { you, state, dispatch, bumpTick, recordViolation, refs } = ctx;
   const { placedForDraw, timedOutOwnHiddenForDraw } = refs;
   // Self-contained (TIMEOUT carries its own card; TIMEOUT_HIDDEN carries
   // none by design), so — unlike END_TURN — there's no local pendingCard
-  // to wait on in the general case. Still wait for my own dispatch to
-  // catch up to the turn this reports, same readiness gate as END_TURN
-  // (handleOpponentEndTurn). Trusted as-is, like every other opponent event
-  // applied in this queue: TIMEOUT always carries a card the sender legitimately
-  // had, and TIMEOUT_HIDDEN needs no cross-check beyond the turn match
-  // already required to apply it.
+  // to wait on in the general case. Still wait for local state to catch up
+  // to the turn this reports, same readiness gate as END_TURN. Trusted as-is:
+  // TIMEOUT always carries a card the sender legitimately had, and
+  // TIMEOUT_HIDDEN needs no cross-check beyond the turn match already
+  // required to apply it. `by` is the timed-out player; when it is NOT me, I
+  // wrote this event (catch-up) and it applies as written.
   if (state.phase !== "placing" || state.turn !== event.by) return;
   if (event.type === "TIMEOUT_HIDDEN" && event.by === you) {
-    // The one case this queue ever reports MY OWN turn: only the
+    // The one case that reports MY OWN turn: only the
     // non-active player may write TIMEOUT_HIDDEN, so this is the
     // opponent telling me MY hidden turn timed out. Unlike the selector
     // (who never learns this card), I'm the dealer here — the same
@@ -169,7 +174,7 @@ function handleOpponentTimeout(
     // both discard a card I already hold AND violate the reducer's own
     // precondition (it asserts no card is pending). So translate to the
     // real TIMEOUT locally with my known card — same asymmetric-by-role
-    // translation already used in handleOpponentEndTurn for an opponent's
+    // translation already used in handleEndTurn for an opponent's
     // face-down END_TURN -> PLACE_HIDDEN — and commit it exactly like
     // `placePending` would have, so the reveal-phase batch can still name and bind it.
     if (state.pendingCard === null) {
@@ -189,17 +194,17 @@ function handleOpponentTimeout(
       // counter almost instantly regardless of how much real time has
       // actually passed.
       const now = Date.now();
-      if (ownHiddenTimeoutDeadline.current?.drawIndex !== state.drawCount) {
-        ownHiddenTimeoutDeadline.current = {
+      if (deadline.current?.drawIndex !== state.drawCount) {
+        deadline.current = {
           drawIndex: state.drawCount,
           at: now + MAX_OWN_HIDDEN_TIMEOUT_RETRIES * OWN_HIDDEN_TIMEOUT_RETRY_DELAY_MS,
         };
       }
-      if (now < ownHiddenTimeoutDeadline.current.at) {
+      if (now < deadline.current.at) {
         setTimeout(bumpTick, OWN_HIDDEN_TIMEOUT_RETRY_DELAY_MS); // force a re-check
         return; // leave the event queued for the retry
       }
-      opponentEvents.current.shift();
+      queue.current.shift();
       dispatch(event);
       return;
     }
@@ -209,10 +214,12 @@ function handleOpponentTimeout(
     // also commit+dispatch a translated TIMEOUT for it.
     if (placedForDraw.current === state.drawCount) return;
     timedOutOwnHiddenForDraw.current = state.drawCount;
-    opponentEvents.current.shift();
+    queue.current.shift();
     const card = state.pendingCard;
     const handIndex = getAutoPlaceIndex(state.hands[you]);
     const drawIndex = state.drawCount - 1;
+    // ponytail: on catch-up this republishes the (deterministic, identical)
+    // placementCommit; Task 14c seeds the guards from the reveal log.
     commitOwnFaceDownCard(ctx, handIndex, card, drawIndex).then(
       () => {
         try {
@@ -233,47 +240,64 @@ function handleOpponentTimeout(
     );
     return;
   }
-  opponentEvents.current.shift();
+  queue.current.shift();
   dispatch(event);
 }
 
 /**
- * Applies a FORFEIT the opponent claimed against me (I was disconnected).
- * Self-contained and valid from any pre-result phase, so no readiness gate;
- * if I'm already in "result" (reducer would throw) it is just dropped.
+ * Applies a FORFEIT: claimed by the opponent against me (I was disconnected),
+ * or by me against the opponent (catch-up). Self-contained and valid from any
+ * pre-result phase, so no readiness gate; if I'm already in "result" (reducer
+ * would throw) it is just dropped.
  */
-function handleOpponentForfeit(ctx: MultiplayerCtx, opponentEvents: Queue, event: ForfeitEvent): void {
-  opponentEvents.current.shift();
+function handleForfeit(ctx: MultiplayerCtx, queue: Queue, event: ForfeitEvent): void {
+  queue.current.shift();
   if (ctx.state.phase === "result") return;
   ctx.dispatch(event);
 }
 
-function handleOpponentEndTurn(ctx: MultiplayerCtx, opponentEvents: Queue, event: EndTurnEvent): void {
-  const { role, state, dispatch, updateProtocol, recordViolation } = ctx;
+/** Why `event` contradicts the locally derived rules (draw index and fill-evenly), or null. */
+function endTurnMismatch(state: GameState, event: EndTurnEvent, turnDrawIndex: number): string | null {
+  const hands = state.hands[event.by];
+  const legal = getLegalHands(hands).includes(event.handIndex);
+  if (legal && event.faceDown === isFaceDownPlacement(hands[event.handIndex]) && event.faceDown === isFaceDownDraw(turnDrawIndex, event.by)) {
+    return null;
+  }
+  return `END_TURN faceDown=${event.faceDown} disagrees with local rules (hand ${event.handIndex}, draw ${turnDrawIndex})`;
+}
+
+function handleEndTurn(ctx: MultiplayerCtx, queue: Queue, event: EndTurnEvent): void {
+  const { you, role, state, dispatch, updateProtocol, refs } = ctx;
   if (state.phase !== "placing" || state.turn !== event.by) return;
-  // Never trust the remote faceDown flag: cross-check the locally derived
-  // rules (draw index and fill-evenly). Draw index of this turn's card:
-  const turnDrawIndex = state.pendingCard !== null ? state.drawCount - 1 : state.drawCount;
-  const legal = getLegalHands(state.hands[event.by]);
-  const expectedFaceDown =
-    legal.includes(event.handIndex) && isFaceDownPlacement(state.hands[event.by][event.handIndex]);
-  if (event.faceDown !== expectedFaceDown || event.faceDown !== isFaceDownDraw(turnDrawIndex, event.by)) {
-    const message = `opponent END_TURN faceDown=${event.faceDown} disagrees with local rules (hand ${event.handIndex}, draw ${turnDrawIndex})`;
-    console.warn(`[useMultiplayerGame] ${message}`);
-    opponentEvents.current.shift();
-    recordViolation(message);
+  if (event.by === you) {
+    // My own END_TURN found in the log (catch-up; live echoes are deduped by
+    // key): wait for my card to resolve, cross-check, apply unchanged.
+    if (state.pendingCard === null) return;
+    const drawIndex = state.drawCount - 1;
+    const mismatch = endTurnMismatch(state, event, drawIndex);
+    if (mismatch) return reject(ctx, queue, `own ${mismatch}`);
+    queue.current.shift();
+    dispatch(event);
+    // My own hidden placement: rebuild the bookkeeping the live path recorded
+    // (its placementCommit is already in the log, so nothing is published).
+    if (role === "dealer" && event.faceDown) refs.ownSlotDraw.current.set(event.handIndex, drawIndex);
     return;
   }
+  // Never trust the remote faceDown flag: cross-check the locally derived
+  // rules. Draw index of this turn's card:
+  const turnDrawIndex = state.pendingCard !== null ? state.drawCount - 1 : state.drawCount;
+  const mismatch = endTurnMismatch(state, event, turnDrawIndex);
+  if (mismatch) return reject(ctx, queue, `opponent ${mismatch}`);
   if (role === "selector" && event.faceDown) {
     // Opponent is the dealer: I never learn this card before the reveal phase.
     if (state.pendingCard !== null) return;
-    opponentEvents.current.shift();
+    queue.current.shift();
     const hiddenDrawIndex = state.drawCount;
     updateProtocol("hidden placement draw", (cur) => recordHiddenDraw(cur, event.handIndex, hiddenDrawIndex));
     dispatch({ type: "PLACE_HIDDEN", by: event.by, handIndex: event.handIndex });
     return;
   }
   if (state.pendingCard === null) return; // card reveal chain not resolved yet
-  opponentEvents.current.shift();
+  queue.current.shift();
   dispatch(event);
 }
