@@ -6,7 +6,7 @@ import { generateSalt } from "../../../crypto/commitment";
 import { commitPlacement } from "../../../crypto/protocolController";
 import { isFaceDownDraw, validReplaceHand } from "../../../crypto/drawSchedule";
 import { publishEvent, publishReveal } from "../../../net/sync";
-import { publishTurnStarted } from "../../../net/roomState";
+import { publishRematchVote, publishTurnStarted } from "../../../net/roomState";
 import type { MultiplayerCtx } from "./context";
 
 // My own moves: plain functions over the render's ctx (no effects). Each reads
@@ -146,6 +146,21 @@ export function claimWin(ctx: MultiplayerCtx): void {
   }
   publishEvent(db, roomId, event).catch((err: unknown) => {
     console.error("[useMultiplayerGame] failed to publish FORFEIT", err);
+  });
+}
+
+/**
+ * Votes for a rematch. The rules don't tie votes to a game, so the client is
+ * strict: only from this game's result screen, and once (a second click, or a
+ * stale handle after the room reset, must never publish another vote).
+ */
+export function playAgain(ctx: MultiplayerCtx): void {
+  const { db, roomId, you, state, refs } = ctx;
+  if (state.phase !== "result" || refs.rematchVoted.current) return;
+  refs.rematchVoted.current = true;
+  publishRematchVote(db, roomId, you).catch((err: unknown) => {
+    console.error("[useMultiplayerGame] failed to publish rematch vote", err);
+    refs.rematchVoted.current = false; // nothing was recorded: allow a click-retry
   });
 }
 

@@ -46,6 +46,8 @@ export type SharedRefs = {
   replacedForDraw: RefObject<number | null>;
   timedOutForDraw: RefObject<number | null>;
   timedOutOwnHiddenForDraw: RefObject<number | null>;
+  // My rematch vote is published (or in flight) for this game: once per mount.
+  rematchVoted: RefObject<boolean>;
 };
 
 /** Everything a sub-hook needs. Rebuilt by the root every render (latest `state`). */

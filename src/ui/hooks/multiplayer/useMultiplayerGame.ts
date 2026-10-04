@@ -5,7 +5,8 @@ import type { PlayerId } from "../../../engine/types";
 import { useGameEngine } from "../useGameEngine";
 import type { SoloGame } from "../useSoloGame";
 import type { MultiplayerCtx, SharedRefs } from "./context";
-import { claimWin, placePending, replace, timeout } from "./myMoves";
+import { claimWin, placePending, playAgain, replace, timeout } from "./myMoves";
+import { useRematch } from "./useRematch";
 import { useOpeningDeal } from "./useOpeningDeal";
 import { useOpponentEvents } from "./useOpponentEvents";
 import { useProtocol } from "./useProtocol";
@@ -31,6 +32,8 @@ export type MultiplayerGame = Omit<SoloGame, "aiThinking"> & {
   hasViolation: boolean;
   /** Forfeit the (disconnected) opponent; multiplayer-only, so not on SoloGame. */
   claimWin: () => void;
+  /** True once MY rematch vote is observed; multiplayer-only. */
+  rematchRequested: boolean;
 };
 
 /**
@@ -63,6 +66,7 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
     replacedForDraw: useRef<number | null>(null),
     timedOutForDraw: useRef<number | null>(null),
     timedOutOwnHiddenForDraw: useRef<number | null>(null),
+    rematchVoted: useRef(false),
   };
   const ctx: MultiplayerCtx = { db, roomId, you, gameNumber, state, dispatch, ...protocolHandle, ...shuffle, refs };
 
@@ -70,6 +74,7 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
   useOpponentEvents(ctx);
   useTurnDraws(ctx);
   useRevealPhase(ctx);
+  const { rematchRequested } = useRematch(ctx);
 
   const isHumanTurn = state.turn === you && (state.phase === "placing" || state.phase === "replace");
   // Replace-phase legality arrives with the replace flow (a later task).
@@ -96,7 +101,7 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
     hasViolation: protocolHandle.violated,
     timeout: () => timeout(ctx),
     claimWin: () => claimWin(ctx),
-    // Stub for a later task (rematch).
-    playAgain: () => {},
+    playAgain: () => playAgain(ctx),
+    rematchRequested,
   };
 }

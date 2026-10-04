@@ -44,6 +44,13 @@ describe("ResultOverlay", () => {
     expect(screen.getByText("High Card vs High Card")).toBeInTheDocument();
   });
 
+  it("shows a disabled waiting state after the rematch vote, Home stays", () => {
+    renderIn(<ResultOverlay result={result} you="p1" onPlayAgain={vi.fn()} rematchRequested />);
+    expect(screen.getByRole("button", { name: "Waiting for opponent…" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Play again" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Home" })).toBeInTheDocument();
+  });
+
   it("calls onPlayAgain and links home", () => {
     const onPlayAgain = vi.fn();
     renderIn(<ResultOverlay result={result} you="p1" onPlayAgain={onPlayAgain} />);

@@ -271,6 +271,7 @@ const cases: Case[] = [
   { name: "reveals: selector p1 cannot publish a placementCommit", as: "alice", seed: dealerP2, write: push("protocol/reveals", placementCommit("p1")), allow: false },
   { name: "reveals: the dealer publishes its placementReveal batch", as: "alice", write: push("protocol/reveals", placementReveal("p1")), allow: true },
   { name: "reveals: the selector publishes its placementReveal batch", as: "bob", write: push("protocol/reveals", placementReveal("p2")), allow: true },
+  { name: "reveals: the selector's placementReveal with NO cards key (Firebase drops empty arrays)", as: "bob", write: push("protocol/reveals", { kind: "placementReveal", by: "p2" }), allow: true },
   { name: "reveals: a placementReveal from a bogus seat is rejected", as: "bob", write: push("protocol/reveals", placementReveal("p3")), allow: false },
   { name: "reveals: a placementReveal cannot impersonate the other seat", as: "alice", write: push("protocol/reveals", placementReveal("p2")), allow: false },
   { name: "reveals: a card reveal cannot impersonate the dealer", as: "bob", write: push("protocol/reveals", cardReveal("p1")), allow: false },
