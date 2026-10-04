@@ -4,6 +4,7 @@ import { useParams } from "react-router-dom";
 import { useFirebaseClient } from "../../app/firebaseContext";
 import { MAX_STRIKES, TURN_TIMEOUT_MS } from "../../engine/constants";
 import { otherPlayer } from "../../engine/deck";
+import { subscribeToGameNumber } from "../../net/roomState";
 import { subscribeToPresence } from "../../net/sync";
 import { Board } from "../components/Board";
 import { Card } from "../components/Card";
@@ -23,15 +24,36 @@ function readYou(roomId: string): "p1" | "p2" {
   return (sessionStorage.getItem(`duelPoker-you-${roomId}`) as "p1" | "p2" | null) ?? "p1";
 }
 
+/**
+ * Route shell. A rematch is a REMOUNT: the body is keyed by the room's
+ * gameNumber, so every per-game hook (refs, protocol state, seeds, engine
+ * state) starts from scratch when the reset bumps it. Nothing renders until
+ * the first gameNumber arrives, so a refresh mid-series never boots game 1.
+ */
 export function GameScreen() {
   const { roomId } = useParams();
+  const { client } = useFirebaseClient();
+  const [gameNumber, setGameNumber] = useState<number | null>(null);
+  useEffect(() => {
+    if (!roomId) return;
+    return subscribeToGameNumber(client.db, roomId, setGameNumber);
+  }, [roomId, client.db]);
+
+  if (!roomId) return <GameScreenBody key="solo" />;
+  if (gameNumber === null) return null;
+  return <GameScreenBody key={gameNumber} roomId={roomId} gameNumber={gameNumber} />;
+}
+
+type GameScreenBodyProps = { roomId?: string; gameNumber?: number };
+
+function GameScreenBody({ roomId, gameNumber = 1 }: GameScreenBodyProps) {
   const { client } = useFirebaseClient();
   const solo = useSoloGame();
   const multiplayer = useMultiplayerGame({
     db: client.db,
     roomId: roomId ?? "",
     you: roomId ? readYou(roomId) : "p1",
-    gameNumber: 1,
+    gameNumber,
   });
   // Both hooks always run (hooks can't be called conditionally); only one
   // result is used. `useMultiplayerGame` no-ops its Firebase subscriptions
@@ -123,7 +145,12 @@ export function GameScreen() {
         )}
 
         {state.phase === "result" && state.result && (
-          <ResultOverlay result={state.result} you={g.you} onPlayAgain={g.playAgain} />
+          <ResultOverlay
+            result={state.result}
+            you={g.you}
+            onPlayAgain={g.playAgain}
+            rematchRequested={roomId ? multiplayer.rematchRequested : false}
+          />
         )}
 
         {roomId && state.phase !== "result" && (

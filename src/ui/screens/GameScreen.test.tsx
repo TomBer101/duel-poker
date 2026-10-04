@@ -1,4 +1,5 @@
 import { describe, expect, test, vi, beforeEach } from "vitest";
+import { useEffect } from "react";
 import { act, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { GameScreen } from "./GameScreen";
@@ -23,14 +24,36 @@ const handle = {
 };
 
 const claimWin = vi.hoisted(() => vi.fn());
+const gn = vi.hoisted(() => ({
+  deliver: null as null | ((n: number) => void),
+  mounts: 0,
+  calls: [] as { gameNumber: number }[],
+}));
 const mpState = vi.hoisted(() => ({ current: null as unknown }));
 vi.mock("../hooks/useSoloGame", () => ({ useSoloGame: () => handle }));
 vi.mock("../hooks/multiplayer/useMultiplayerGame", () => ({
-  useMultiplayerGame: () => ({ ...handle, state: mpState.current, you: "p2", hasViolation: false, claimWin }),
+  useMultiplayerGame: (opts: { gameNumber: number }) => {
+    gn.calls.push(opts);
+    useEffect(() => {
+      gn.mounts++;
+    }, []);
+    return { ...handle, state: mpState.current, you: "p2", hasViolation: false, claimWin, rematchRequested: false };
+  },
 }));
 
+vi.mock("../../net/roomState", () => ({
+  subscribeToGameNumber: (_db: unknown, _room: string, cb: (n: number) => void) => {
+    gn.deliver = cb;
+    cb(1);
+    return () => {};
+  },
+}));
+
+// Stable identity: the real context value is stable, and the outer screen's
+// gameNumber subscription is keyed on `client.db`.
+const fakeClient = vi.hoisted(() => ({ client: { db: {} }, uid: "test-uid" }));
 vi.mock("../../app/firebaseContext", () => ({
-  useFirebaseClient: () => ({ client: { db: {} }, uid: "test-uid" }),
+  useFirebaseClient: () => fakeClient,
 }));
 
 // Not under test here (route selection only); the real hook talks to
@@ -79,6 +102,28 @@ describe("GameScreen route selection", () => {
     expect(call[3]).toBe(TURN_TIMEOUT_MS);
     expect(call[4]).toBe(handle.timeout);
     expect(call[5]).toBe(`placing:${handle.state.turn}`);
+  });
+});
+
+describe("GameScreen rematch remount", () => {
+  test("a new gameNumber remounts the body and re-calls the hook with it", () => {
+    sessionStorage.setItem("duelPoker-you-ABC123", "p2");
+    gn.mounts = 0;
+    gn.calls.length = 0;
+    render(
+      <MemoryRouter initialEntries={["/room/ABC123"]}>
+        <Routes>
+          <Route path="/room/:roomId" element={<GameScreen />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(gn.mounts).toBe(1);
+    expect(gn.calls.at(-1)?.gameNumber).toBe(1);
+    act(() => gn.deliver!(1)); // same game: no remount
+    expect(gn.mounts).toBe(1);
+    act(() => gn.deliver!(2));
+    expect(gn.mounts).toBe(2);
+    expect(gn.calls.at(-1)?.gameNumber).toBe(2);
   });
 });
 

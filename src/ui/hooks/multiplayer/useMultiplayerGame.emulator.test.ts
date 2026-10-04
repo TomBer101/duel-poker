@@ -1,8 +1,9 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { createElement, useEffect, useState } from "react";
+import { act, render, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, test, afterAll, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import { connectToEmulators, createFirebaseClient, signInAnonymous } from "../../../net/firebase";
 import { loadSeed } from "../../../crypto/seedStorage";
-import { publishRematchVote, resetForRematch } from "../../../net/roomState";
+import { publishRematchVote, resetForRematch, subscribeToGameNumber } from "../../../net/roomState";
 import { createRoom, joinRoom } from "../../../net/room";
 import { useMultiplayerGame } from "./useMultiplayerGame";
 import { get, goOffline, goOnline, ref, type Database } from "firebase/database";
@@ -795,4 +796,98 @@ describe("useMultiplayerGame - claimWin (FORFEIT)", () => {
     expect(p1.result.current.hasViolation).toBe(false);
     expect(p2.result.current.hasViolation).toBe(false);
   }, 20000);
+});
+
+describe("useMultiplayerGame - rematch (real rules, two clients)", () => {
+  const read = async (seatDb: Database, path: string) => (await get(ref(seatDb, `rooms/${roomId}/${path}`))).val();
+
+  type Handle = ReturnType<typeof useMultiplayerGame>;
+  /** A minimal GameScreen: the hook lives in a body keyed by the room's
+   *  gameNumber, so a gameNumber bump REMOUNTS it (new hook instance). */
+  function mountKeyed(seatDb: Database, you: PlayerId) {
+    const latest: { handle: Handle | null; gameNumbers: number[] } = { handle: null, gameNumbers: [] };
+    function Body({ gameNumber }: { gameNumber: number }) {
+      useEffect(() => {
+        latest.gameNumbers.push(gameNumber);
+      }, [gameNumber]);
+      latest.handle = useMultiplayerGame({ db: seatDb, roomId, you, gameNumber });
+      return null;
+    }
+    function Shell() {
+      const [gameNumber, setGameNumber] = useState<number | null>(null);
+      useEffect(() => subscribeToGameNumber(seatDb, roomId, setGameNumber), []);
+      return gameNumber === null ? null : createElement(Body, { key: gameNumber, gameNumber });
+    }
+    render(createElement(Shell));
+    return latest;
+  }
+
+  test("both vote -> p1 resets the room; the remounted hooks deal game 2 with swapped roles", async () => {
+    await dealtBy("p1");
+    const p1 = mountKeyed(db, "p1");
+    const p2 = mountKeyed(db2, "p2");
+    await waitFor(
+      () => {
+        expect(p1.handle?.state.drawCount).toBeGreaterThanOrEqual(10);
+        expect(p2.handle?.state.drawCount).toBeGreaterThanOrEqual(10);
+      },
+      { timeout: 5000 },
+    );
+    const game1Commitments = {
+      dealer: await read(db, "protocol/commitments/dealer"),
+      selector: await read(db, "protocol/commitments/selector"),
+    };
+    expect(game1Commitments.dealer).not.toBeNull();
+
+    // Fast path to the result phase: p2 drops, p1 claims the forfeit.
+    await dropConnection(db2, "p2");
+    act(() => p1.handle!.claimWin());
+    await waitFor(
+      () => {
+        expect(p1.handle?.state.phase).toBe("result");
+        expect(p2.handle?.state.phase).toBe("result");
+      },
+      { timeout: 8000 },
+    );
+
+    // Both vote from the result screen; a second click publishes nothing new.
+    act(() => p2.handle!.playAgain());
+    await waitFor(() => expect(p2.handle?.rematchRequested).toBe(true), { timeout: 5000 });
+    expect(p1.handle?.rematchRequested).toBe(false);
+    act(() => p1.handle!.playAgain());
+    act(() => p1.handle!.playAgain());
+
+    // The reset: game 2, dealer flipped, per-game data cleared, new hooks
+    // mounted (gameNumber 2) and dealing.
+    await waitFor(
+      () => {
+        expect(p1.gameNumbers).toEqual([1, 2]);
+        expect(p2.gameNumbers).toEqual([1, 2]);
+        expect(p1.handle?.state.drawCount).toBeGreaterThanOrEqual(10);
+        expect(p2.handle?.state.drawCount).toBeGreaterThanOrEqual(10);
+        expect(p1.handle?.state.phase).toBe("placing");
+      },
+      { timeout: 10000 },
+    );
+    expect(await read(db, "gameNumber")).toBe(2);
+    expect(await read(db, "protocol/dealer")).toBe("p2");
+    expect(await read(db, "events")).toBeNull();
+    expect(await read(db, "rematch")).toBeNull();
+    expect(await read(db, "meta/turn")).toBe("p1");
+    const reveals = Object.values((await read(db, "protocol/reveals")) as Record<string, ProtocolReveal>);
+    // Only game 2's reveals remain: p1 (selector now) published positions 0..9.
+    expect(reveals.every((r) => r.kind !== "placementReveal")).toBe(true);
+    expect(p1.handle?.rematchRequested).toBe(false);
+
+    // Roles swapped (p2 deals, p1 selects) with fresh seeds => new commitments.
+    const game2Dealer = await read(db, "protocol/commitments/dealer");
+    const game2Selector = await read(db, "protocol/commitments/selector");
+    for (const c1 of [game1Commitments.dealer, game1Commitments.selector]) {
+      expect(game2Dealer).not.toEqual(c1);
+      expect(game2Selector).not.toEqual(c1);
+    }
+    expect(loadSeed(roomId, 2, "p1")).not.toEqual(loadSeed(roomId, 1, "p1"));
+    expect(p1.handle?.hasViolation).toBe(false);
+    expect(p2.handle?.hasViolation).toBe(false);
+  }, 60000);
 });
