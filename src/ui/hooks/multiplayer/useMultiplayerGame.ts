@@ -60,12 +60,12 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
 
   // Cross-module refs: created once here, shared through ctx (see SharedRefs).
   const refs: SharedRefs = {
-    pendingPlacementSalts: useRef<Map<number, Uint8Array>>(new Map()),
     ownSlotDraw: useRef<Map<number, number>>(new Map()),
     placedForDraw: useRef<number | null>(null),
     replacedForDraw: useRef<number | null>(null),
     timedOutForDraw: useRef<number | null>(null),
     timedOutOwnHiddenForDraw: useRef<number | null>(null),
+    claimedWin: useRef(false),
     rematchVoted: useRef(false),
     seenKeys: useRef<Set<string>>(new Set()),
   };

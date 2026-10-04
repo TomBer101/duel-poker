@@ -123,6 +123,16 @@ async function adminPush(path: string, value: unknown): Promise<void> {
   if (!res.ok) throw new Error(`admin write failed: ${await res.text()}`);
 }
 
+/** Rules-bypassing overwrite (admin token), e.g. to force a legitimate rules denial. */
+async function adminSet(path: string, value: unknown): Promise<void> {
+  const res = await fetch(`${EMULATOR_DB}/${path}.json?ns=${NAMESPACE}`, {
+    method: "PUT",
+    headers: { Authorization: "Bearer owner" },
+    body: JSON.stringify(value),
+  });
+  if (!res.ok) throw new Error(`admin write failed: ${await res.text()}`);
+}
+
 // Two real clients with distinct anonymous users: p1 creates the room via the
 // real createRoom (which also announces p1 as game 1's dealer), p2 joins it.
 let db: Database; // p1's client
@@ -301,6 +311,49 @@ describe("useMultiplayerGame - placing phase", () => {
       }
     }
   }, 60000);
+});
+
+describe("useMultiplayerGame - publish-then-apply", () => {
+  test("a rules-denied END_TURN leaves local state unchanged; a retry is accepted and both converge", async () => {
+    await dealtBy("p1");
+    const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
+    const p2 = renderHook(() => useMultiplayerGame({ db: db2, roomId, you: "p2", gameNumber: 1 }));
+    await waitFor(
+      () => {
+        expect(p1.result.current.state.pendingCard).not.toBeNull();
+        expect(p1.result.current.legalHands.length).toBeGreaterThan(0);
+      },
+      { timeout: 5000 },
+    );
+
+    // Force a real denial: meta/turn names p2, so the rules reject p1's END_TURN.
+    await adminSet(`rooms/${roomId}/meta/turn`, "p2");
+    const before = p1.result.current.state;
+    await act(async () => {
+      await p1.result.current.placePending(p1.result.current.legalHands[0]);
+    });
+    expect(p1.result.current.state).toBe(before);
+    expect((await get(ref(db, `rooms/${roomId}/events`))).val()).toBeNull();
+    expect(p1.result.current.hasViolation).toBe(false);
+
+    // The in-flight guard was cleared: once the turn is p1's again, the same
+    // move goes through and both clients apply it.
+    await adminSet(`rooms/${roomId}/meta/turn`, "p1");
+    await act(async () => {
+      await p1.result.current.placePending(p1.result.current.legalHands[0]);
+    });
+    await waitFor(
+      () => {
+        expect(p1.result.current.state.turn).toBe("p2");
+        expect(p2.result.current.state.turn).toBe("p2");
+        expect(p1.result.current.state.hands).toEqual(p2.result.current.state.hands);
+      },
+      { timeout: 5000 },
+    );
+    expect(p1.result.current.state.hands.p1.reduce((n, h) => n + h.cards.length, 0)).toBe(6);
+    expect(p1.result.current.hasViolation).toBe(false);
+    expect(p2.result.current.hasViolation).toBe(false);
+  }, 20000);
 });
 
 describe("useMultiplayerGame - replace and reveal phases", () => {
@@ -517,7 +570,9 @@ describe("useMultiplayerGame - timeout", () => {
 
     // It's p1's own turn: p1 timing out itself is a no-op (only the
     // non-active player may ever report a timeout).
-    act(() => p1.result.current.timeout());
+await act(async () => {
+      await p1.result.current.timeout();
+    });
     expect(p1.result.current.state.strikes).toEqual({ p1: 0, p2: 0 });
 
     await act(async () => {
@@ -536,7 +591,9 @@ describe("useMultiplayerGame - timeout", () => {
     );
 
     // p1 (not active) reports p2's timeout with the now-resolved card.
-    act(() => p1.result.current.timeout());
+await act(async () => {
+      await p1.result.current.timeout();
+    });
 
     await waitFor(
       () => {
@@ -590,7 +647,9 @@ describe("useMultiplayerGame - timeout", () => {
     expect(p2.result.current.state.pendingCard).toBeNull();
 
     // p2 (the selector, not active) reports p1's hidden turn as timed out.
-    act(() => p2.result.current.timeout());
+await act(async () => {
+      await p2.result.current.timeout();
+    });
 
     await waitFor(
       () => {
@@ -650,7 +709,9 @@ describe("useMultiplayerGame - timeout", () => {
     expect(p2.result.current.state.pendingCard).toBeNull();
 
     // p2 reports the timeout immediately, before p1 has any card to translate.
-    act(() => p2.result.current.timeout());
+await act(async () => {
+      await p2.result.current.timeout();
+    });
 
     await waitFor(
       () => {
@@ -697,8 +758,11 @@ describe("useMultiplayerGame - timeout", () => {
     );
     expect(p1.result.current.state.pendingCard).toBeNull();
     expect(p2.result.current.state.pendingCard).toBeNull();
+await act(async () => {
 
-    act(() => p2.result.current.timeout());
+      await p2.result.current.timeout();
+
+    });
 
     // The retry bound (3 x 300ms) must be exhausted before the fallback
     // lands, so this genuinely waits past it.
@@ -728,7 +792,9 @@ describe("useMultiplayerGame - timeout", () => {
     // but the hook's dealer subscription has not delivered it on this first
     // render, and p2 is not even mounted): must not throw, must not change
     // anything.
-    expect(() => act(() => p1.result.current.timeout())).not.toThrow();
+    await act(async () => {
+      await p1.result.current.timeout(); // must not throw
+    });
     expect(p1.result.current.state.phase).not.toBe("result");
 
     const p2 = renderHook(() => useMultiplayerGame({ db: db2, roomId, you: "p2", gameNumber: 1 }));
@@ -737,7 +803,9 @@ describe("useMultiplayerGame - timeout", () => {
 
     // p1 is dealer and it's p1's own turn: it must never self-report.
     const before = p1.result.current.state;
-    act(() => p1.result.current.timeout());
+await act(async () => {
+      await p1.result.current.timeout();
+    });
     expect(p1.result.current.state).toBe(before);
     expect(p1.result.current.hasViolation).toBe(false);
     void p2; // kept mounted only so the deal/draw pipeline actually runs
@@ -766,7 +834,9 @@ describe("useMultiplayerGame - claimWin (FORFEIT)", () => {
 
     // p1 claims: p2 forfeits. p2's client sees event.by === "p2" === you and
     // must APPLY it (it is not p2's own echo); p1's echo must be ignored.
-    act(() => p1.result.current.claimWin());
+await act(async () => {
+      await p1.result.current.claimWin();
+    });
 
     await waitFor(
       () => {
@@ -784,13 +854,19 @@ describe("useMultiplayerGame - claimWin (FORFEIT)", () => {
 
   test("claimWin is a no-op once the game is in result", async () => {
     const { p1, p2 } = await startPlacing();
-    act(() => p1.result.current.claimWin());
+await act(async () => {
+      await p1.result.current.claimWin();
+    });
     await waitFor(() => expect(p2.result.current.state.phase).toBe("result"), { timeout: 8000 });
     await waitFor(() => expect(p1.result.current.state.phase).toBe("result"));
 
     const before = p1.result.current.state;
-    act(() => p1.result.current.claimWin());
-    act(() => p2.result.current.claimWin()); // would forfeit p1 if not guarded
+await act(async () => {
+      await p1.result.current.claimWin();
+    });
+await act(async () => {
+      await p2.result.current.claimWin();
+    }); // would forfeit p1 if not guarded
     expect(p1.result.current.state).toBe(before);
     expect(p2.result.current.state.forfeitedBy).toBe("p2");
     expect(p1.result.current.hasViolation).toBe(false);
@@ -841,7 +917,9 @@ describe("useMultiplayerGame - rematch (real rules, two clients)", () => {
 
     // Fast path to the result phase: p2 drops, p1 claims the forfeit.
     await dropConnection(db2, "p2");
-    act(() => p1.handle!.claimWin());
+await act(async () => {
+      await p1.handle!.claimWin();
+    });
     await waitFor(
       () => {
         expect(p1.handle?.state.phase).toBe("result");
@@ -905,7 +983,9 @@ describe("useMultiplayerGame - rematch (real rules, two clients)", () => {
     );
     const game1Dealer = await read(db, "protocol/commitments/dealer");
     await dropConnection(db2, "p2");
-    act(() => p1.result.current.claimWin());
+await act(async () => {
+      await p1.result.current.claimWin();
+    });
     await waitFor(() => expect(p2.result.current.state.phase).toBe("result"), { timeout: 8000 });
     act(() => p1.result.current.playAgain());
     act(() => p2.result.current.playAgain());

@@ -33,12 +33,10 @@ export type ShuffleHandle = {
  * shared through ctx; never duplicated.
  */
 export type SharedRefs = {
-  // The salts of my own secret face-down placements (needed by the reveal
-  // phase) — dealer only.
-  pendingPlacementSalts: RefObject<Map<number, Uint8Array>>;
   // Dealer only: hand -> the draw index whose card currently sits face-down in
-  // that hand (set when it's placed/swapped), so the reveal batch can name and
-  // bind each card to the deck commitment at that draw's position.
+  // that hand (set when it's placed/swapped, or rebuilt from the log on
+  // catch-up), so the reveal batch can name and bind each card to the deck
+  // commitment at that draw's position and re-derive its placement salt.
   ownSlotDraw: RefObject<Map<number, number>>;
   // The draw index whose placement / replace / timeout is already in flight
   // (double-click and cross-path guards).
@@ -46,6 +44,8 @@ export type SharedRefs = {
   replacedForDraw: RefObject<number | null>;
   timedOutForDraw: RefObject<number | null>;
   timedOutOwnHiddenForDraw: RefObject<number | null>;
+  // My FORFEIT claim is in flight or applied (double-click guard).
+  claimedWin: RefObject<boolean>;
   // My rematch vote is published (or in flight) for this game: once per mount.
   rematchVoted: RefObject<boolean>;
   // Push keys of events already applied (or being published by me): the

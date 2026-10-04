@@ -1,10 +1,10 @@
 import { describe, expect, test, vi } from "vitest";
-import { createInitialState, gameReducer } from "../../../engine/reducer";
-import { getLegalHands, isFaceDownPlacement } from "../../../engine/placement";
-import { autoPlacePlacingPhase, orderedDeck } from "../../../engine/testkit";
-import type { GameEvent, GameState, PlayerId } from "../../../engine/types";
+import { gameReducer } from "../../../engine/reducer";
+import { autoPlacePlacingPhase } from "../../../engine/testkit";
+import type { GameEvent } from "../../../engine/types";
 import { publishEvent, publishReveal } from "../../../net/sync";
 import type { MultiplayerCtx } from "./context";
+import { before, deck, dealt, drawn, endTurn, fakeCtx } from "./testCtx";
 import { applyHead, enqueueOnce, type Queued } from "./useOpponentEvents";
 
 vi.mock("../../../net/sync", () => ({
@@ -14,9 +14,6 @@ vi.mock("../../../net/sync", () => ({
   newEventKey: vi.fn(),
 }));
 vi.mock("../../../net/roomState", () => ({ publishTurnStarted: vi.fn(), publishRematchVote: vi.fn() }));
-
-const deck = orderedDeck();
-const endTurn = (by: PlayerId, handIndex: number, faceDown = false): GameEvent => ({ type: "END_TURN", by, handIndex, faceDown });
 
 describe("enqueueOnce (key dedupe)", () => {
   test("a duplicate delivery of the same key is queued once", () => {
@@ -50,50 +47,6 @@ describe("enqueueOnce (key dedupe)", () => {
     expect(queue.map((q) => q.key)).toEqual(["a", "c"]);
   });
 });
-
-function dealt(): GameState {
-  return gameReducer(createInitialState({ mode: "multiplayer" }), {
-    type: "DEAL",
-    cards: { p1: deck.slice(0, 5), p2: deck.slice(5, 10) },
-  });
-}
-
-/** Plays placing turns on the lowest legal hand until `drawCount === drawIndex` (next card not drawn). */
-function before(drawIndex: number): GameState {
-  let s = dealt();
-  while (s.drawCount < drawIndex) {
-    const by = s.turn;
-    s = gameReducer(s, { type: "DRAW", by, card: deck[s.drawCount] });
-    const h = getLegalHands(s.hands[by])[0];
-    s = gameReducer(s, endTurn(by, h, isFaceDownPlacement(s.hands[by][h])));
-  }
-  return s;
-}
-
-const drawn = (s: GameState): GameState => gameReducer(s, { type: "DRAW", by: s.turn, card: deck[s.drawCount] });
-
-function fakeCtx(state: GameState, you: PlayerId, role: "dealer" | "selector") {
-  const ctx = {
-    you,
-    role,
-    state,
-    dispatch: vi.fn(),
-    recordViolation: vi.fn(),
-    updateProtocol: vi.fn(),
-    warnOnce: vi.fn(),
-    bumpTick: vi.fn(),
-    refs: {
-      ownSlotDraw: { current: new Map<number, number>() },
-      placedForDraw: { current: null },
-      replacedForDraw: { current: null },
-      timedOutForDraw: { current: null },
-      timedOutOwnHiddenForDraw: { current: null },
-      rematchVoted: { current: false },
-      seenKeys: { current: new Set<string>() },
-    },
-  };
-  return ctx as typeof ctx & MultiplayerCtx;
-}
 
 function run(ctx: MultiplayerCtx, ...events: GameEvent[]) {
   const queue = { current: events.map((event, i) => ({ key: `k${i}`, event })) };
