@@ -175,13 +175,17 @@
           ".write": "auth != null && (root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid || root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) && root.child('rooms').child($roomId).child('rematch/p1').val() == true && root.child('rooms').child($roomId).child('rematch/p2').val() == true && !newData.parent().child('rematch').exists() && !newData.parent().child('events').exists() && !newData.parent().child('protocol/commitments').exists() && !newData.parent().child('protocol/reveals').exists() && newData.parent().child('protocol/dealer').exists() && newData.parent().child('protocol/dealer').val() != root.child('rooms').child($roomId).child('protocol/dealer').val() && newData.parent().child('gameNumber').exists() && newData.parent().child('gameNumber').val() != root.child('rooms').child($roomId).child('gameNumber').val()",
           ".validate": "newData.isNumber() && ((data.exists() && newData.val() == data.val() + 1) || (!data.exists() && newData.val() == 2))"
         },
+        "scoredGame": {
+          ".write": "auth != null && newData.exists() && ((root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid && newData.parent().child('score/p1').val() == (root.child('rooms').child($roomId).child('score/p1').exists() ? root.child('rooms').child($roomId).child('score/p1').val() + 1 : 1)) || (root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid && newData.parent().child('score/p2').val() == (root.child('rooms').child($roomId).child('score/p2').exists() ? root.child('rooms').child($roomId).child('score/p2').val() + 1 : 1)))",
+          ".validate": "newData.isNumber() && newData.val() % 1 == 0 && newData.val() == (root.child('rooms').child($roomId).child('gameNumber').exists() ? root.child('rooms').child($roomId).child('gameNumber').val() : 1) && newData.val() != data.val()"
+        },
         "score": {
           "p1": {
-            ".write": "auth != null && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid && newData.exists()",
+            ".write": "auth != null && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid && newData.exists() && newData.parent().parent().child('scoredGame').val() == (root.child('rooms').child($roomId).child('gameNumber').exists() ? root.child('rooms').child($roomId).child('gameNumber').val() : 1) && newData.parent().parent().child('scoredGame').val() != root.child('rooms').child($roomId).child('scoredGame').val()",
             ".validate": "newData.isNumber() && ((data.exists() && newData.val() == data.val() + 1) || (!data.exists() && newData.val() == 1))"
           },
           "p2": {
-            ".write": "auth != null && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid && newData.exists()",
+            ".write": "auth != null && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid && newData.exists() && newData.parent().parent().child('scoredGame').val() == (root.child('rooms').child($roomId).child('gameNumber').exists() ? root.child('rooms').child($roomId).child('gameNumber').val() : 1) && newData.parent().parent().child('scoredGame').val() != root.child('rooms').child($roomId).child('scoredGame').val()",
             ".validate": "newData.isNumber() && ((data.exists() && newData.val() == data.val() + 1) || (!data.exists() && newData.val() == 1))"
           }
         },

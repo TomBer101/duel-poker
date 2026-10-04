@@ -182,6 +182,10 @@ const rematchReset = (dealer: string, overrides: Record<string, unknown> = {}, o
   return update(values);
 };
 
+/** The exact shape incrementScore writes: my own score plus the scoredGame marker. */
+const scoreWrite = (player: string, value: number, game: number) =>
+  update({ [`score/${player}`]: value, scoredGame: game });
+
 const bothVoted = (room: Room) => {
   room.rematch = { p1: true, p2: true };
 };
@@ -360,17 +364,27 @@ const cases: Case[] = [
   { name: "gameNumber: not before both voted", as: "alice", seed: (r) => { withGameState(r); r.rematch = { p1: true }; }, write: rematchReset("p2"), allow: false },
   { name: "gameNumber: unseated user", as: "mallory", seed: (r) => { withGameState(r); bothVoted(r); }, write: rematchReset("p2"), allow: false },
 
-  // --- score/$p (the winner's own client increments its own score by 1) ---
-  { name: "score: first win (absent -> 1)", as: "alice", write: set("score/p1", 1), allow: true },
-  { name: "score: increment (2 -> 3)", as: "bob", seed: (r) => { r.score = { p2: 2 }; }, write: set("score/p2", 3), allow: true },
-  { name: "score: skipping a number (absent -> 2)", as: "alice", write: set("score/p1", 2), allow: false },
-  { name: "score: cannot write the other seat's score", as: "alice", write: set("score/p2", 1), allow: false },
-  { name: "score: cannot decrement", as: "alice", seed: (r) => { r.score = { p1: 2 }; }, write: set("score/p1", 1), allow: false },
-  { name: "score: cannot delete", as: "alice", seed: (r) => { r.score = { p1: 2 }; }, write: set("score/p1", null), allow: false },
-  { name: "score: unseated user", as: "mallory", write: set("score/p1", 1), allow: false },
+  // --- score/$p + scoredGame (the winner's client increments its OWN score by 1, once per game) ---
+  { name: "score: first win of game 1 (absent -> 1, scoredGame 1)", as: "alice", write: scoreWrite("p1", 1, 1), allow: true },
+  { name: "score: increment (2 -> 3) in game 1", as: "bob", seed: (r) => { r.score = { p2: 2 }; r.scoredGame = 0; }, write: scoreWrite("p2", 3, 1), allow: true },
+  { name: "score: a second increment in the same game is denied", as: "alice", seed: (r) => { r.score = { p1: 1 }; r.scoredGame = 1; }, write: scoreWrite("p1", 2, 1), allow: false },
+  { name: "score: the OTHER seat cannot increment either once the game is scored", as: "bob", seed: (r) => { r.score = { p1: 1 }; r.scoredGame = 1; }, write: scoreWrite("p2", 1, 1), allow: false },
+  { name: "score: allowed again after a rematch bumped gameNumber", as: "alice", seed: (r) => { r.score = { p1: 1 }; r.scoredGame = 1; r.gameNumber = 2; }, write: scoreWrite("p1", 2, 2), allow: true },
+  { name: "score: game 2 increment with a stale scoredGame (1) is denied", as: "alice", seed: (r) => { r.score = { p1: 1 }; r.scoredGame = 1; r.gameNumber = 2; }, write: scoreWrite("p1", 2, 1), allow: false },
+  { name: "score: increment without writing scoredGame is denied", as: "alice", write: set("score/p1", 1), allow: false },
+  { name: "score: scoredGame with a wrong number (game 1 claims 2) is denied", as: "alice", write: scoreWrite("p1", 1, 2), allow: false },
+  { name: "score: scoredGame fractional is denied", as: "alice", seed: (r) => { r.gameNumber = 2; }, write: scoreWrite("p1", 1, 1.5), allow: false },
+  { name: "score: scoredGame written alone (no score increment) is denied", as: "alice", write: set("scoredGame", 1), allow: false },
+  { name: "score: scoredGame cannot be deleted", as: "alice", seed: (r) => { r.scoredGame = 1; }, write: set("scoredGame", null), allow: false },
+  { name: "score: skipping a number (absent -> 2)", as: "alice", write: scoreWrite("p1", 2, 1), allow: false },
+  { name: "score: cannot write the other seat's score", as: "alice", write: scoreWrite("p2", 1, 1), allow: false },
+  { name: "score: cannot decrement", as: "alice", seed: (r) => { r.score = { p1: 2 }; }, write: scoreWrite("p1", 1, 1), allow: false },
+  { name: "score: cannot delete", as: "alice", seed: (r) => { r.score = { p1: 2 }; }, write: update({ "score/p1": null, scoredGame: 1 }), allow: false },
+  { name: "score: unseated user", as: "mallory", write: scoreWrite("p1", 1, 1), allow: false },
 
   // --- rematch reset (resetForRematch's multi-path update) ---
   { name: "reset: after both votes, the full reset succeeds", as: "bob", seed: (r) => { withGameState(r); bothVoted(r); }, write: rematchReset("p2"), allow: true },
+  { name: "reset: still passes with scoredGame/score left over from the finished game", as: "bob", seed: (r) => { withGameState(r); bothVoted(r); r.score = { p1: 1 }; r.scoredGame = 1; }, write: rematchReset("p2"), allow: true },
   { name: "reset: partial reset, deleting events alone", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: set("events", null), allow: false },
   { name: "reset: partial reset, protocol alone", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: set("protocol", { dealer: "p2" }), allow: false },
   { name: "reset: partial reset, gameNumber alone", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: set("gameNumber", 2), allow: false },
