@@ -1,4 +1,4 @@
-import { describe, expect, test, vi, beforeEach } from "vitest";
+import { describe, expect, test, vi, beforeEach, afterEach } from "vitest";
 import { useEffect } from "react";
 import { act, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -30,6 +30,7 @@ const gn = vi.hoisted(() => ({
   calls: [] as { gameNumber: number }[],
 }));
 const mpState = vi.hoisted(() => ({ current: null as unknown }));
+const violation = vi.hoisted(() => ({ current: null as string | null }));
 vi.mock("../hooks/useSoloGame", () => ({ useSoloGame: () => handle }));
 vi.mock("../hooks/multiplayer/useMultiplayerGame", () => ({
   useMultiplayerGame: (opts: { gameNumber: number }) => {
@@ -37,7 +38,15 @@ vi.mock("../hooks/multiplayer/useMultiplayerGame", () => ({
     useEffect(() => {
       gn.mounts++;
     }, []);
-    return { ...handle, state: mpState.current, you: "p2", hasViolation: false, claimWin, rematchRequested: false };
+    return {
+      ...handle,
+      state: mpState.current,
+      you: "p2",
+      hasViolation: violation.current !== null,
+      violationReason: violation.current,
+      claimWin,
+      rematchRequested: false,
+    };
   },
 }));
 
@@ -104,6 +113,48 @@ describe("GameScreen route selection", () => {
     expect(call[3]).toBe(TURN_TIMEOUT_MS);
     expect(call[4]).toBe(handle.timeout);
     expect(call[5]).toBe(`placing:${handle.state.turn}`);
+  });
+});
+
+describe("GameScreen protocol violation", () => {
+  const renderAt = (path: string, route: string) =>
+    render(
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route path={route} element={<GameScreen />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+  beforeEach(() => {
+    sessionStorage.setItem("duelPoker-you-ABC123", "p2");
+    mpState.current = handle.state;
+    vi.mocked(DisconnectOverlay).mockClear();
+  });
+  afterEach(() => {
+    violation.current = null;
+  });
+
+  test("multiplayer: a violation replaces the board (and overlays) with the error screen and reason", () => {
+    violation.current = "cannot resume this game: seed missing";
+    renderAt("/room/ABC123", "/room/:roomId");
+    expect(screen.getByTestId("protocol-error")).toBeInTheDocument();
+    expect(screen.getByText(/seed missing/)).toBeInTheDocument();
+    expect(screen.queryByTestId("game-screen")).not.toBeInTheDocument();
+    expect(DisconnectOverlay).not.toHaveBeenCalled();
+  });
+
+  test("multiplayer without a violation shows the board", () => {
+    renderAt("/room/ABC123", "/room/:roomId");
+    expect(screen.getByTestId("game-screen")).toBeInTheDocument();
+    expect(screen.queryByTestId("protocol-error")).not.toBeInTheDocument();
+  });
+
+  test("solo ignores the multiplayer violation flag", () => {
+    violation.current = "boom";
+    renderAt("/solo", "/solo");
+    expect(screen.getByTestId("game-screen")).toBeInTheDocument();
+    expect(screen.queryByTestId("protocol-error")).not.toBeInTheDocument();
   });
 });
 

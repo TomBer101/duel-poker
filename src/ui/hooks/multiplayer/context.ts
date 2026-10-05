@@ -11,6 +11,8 @@ export type ProtocolHandle = {
   protocol: RefObject<ProtocolControllerState>;
   protocolTick: number;
   violated: boolean;
+  /** First recorded violation message, for display; null when none. */
+  violationReason: string | null;
   bumpTick: () => void;
   updateProtocol: (
     what: string,

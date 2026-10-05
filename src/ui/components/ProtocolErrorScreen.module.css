@@ -1,0 +1,44 @@
+.screen {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: 1.5rem;
+  text-align: center;
+  background: var(--felt);
+}
+
+.title {
+  margin: 0;
+  color: #ff8a8a;
+}
+
+.message {
+  margin: 0;
+  font-size: 1.1rem;
+  color: #c8d0dc;
+}
+
+.reason {
+  margin: 0;
+  max-width: 32rem;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+  color: #9aa4b2;
+  overflow-wrap: anywhere;
+}
+
+.primary {
+  font: inherit;
+  font-weight: 650;
+  padding: 0.65rem 1.4rem;
+  border-radius: 10px;
+  background: var(--accent-strong);
+  color: #fff;
+  text-decoration: none;
+}
+.primary:hover {
+  background: var(--accent);
+}

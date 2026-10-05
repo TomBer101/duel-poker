@@ -24,9 +24,11 @@ export function useProtocol(): ProtocolHandle {
   // state refs are set) so those effects re-check.
   const [protocolTick, setProtocolTick] = useState(0);
   const [violated, setViolated] = useState(false);
+  const [violationReason, setViolationReason] = useState<string | null>(null);
   function bumpTick(): void {
     setProtocolTick((t) => t + 1);
     setViolated(hasViolation(protocol.current));
+    setViolationReason(protocol.current.violations[0] ?? null);
   }
   function updateProtocol(
     what: string,
@@ -56,5 +58,5 @@ export function useProtocol(): ProtocolHandle {
     console.warn(`[useMultiplayerGame] ${message}`);
   }
 
-  return { protocol, protocolTick, violated, bumpTick, updateProtocol, recordViolation, warnOnce };
+  return { protocol, protocolTick, violated, violationReason, bumpTick, updateProtocol, recordViolation, warnOnce };
 }

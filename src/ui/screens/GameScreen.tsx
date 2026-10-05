@@ -11,6 +11,7 @@ import { Board } from "../components/Board";
 import { Card } from "../components/Card";
 import { DisconnectOverlay } from "../components/DisconnectOverlay";
 import { DrawnCard } from "../components/DrawnCard";
+import { ProtocolErrorScreen } from "../components/ProtocolErrorScreen";
 import { ResultOverlay } from "../components/ResultOverlay";
 import { RevealSequence } from "../components/RevealSequence";
 import { StrikeIndicator } from "../components/StrikeIndicator";
@@ -102,6 +103,11 @@ function GameScreenBody({ roomId, gameNumber = 1 }: GameScreenBodyProps) {
 
   const revealCount =
     state.phase === "reveal" ? state.revealIndex : state.phase === "result" ? 5 : 0;
+
+  // Multiplayer only (solo has no protocol); replaces the board and every overlay.
+  if (roomId && multiplayer.hasViolation) {
+    return <ProtocolErrorScreen reason={multiplayer.violationReason} />;
+  }
 
   return (
     <DndContext

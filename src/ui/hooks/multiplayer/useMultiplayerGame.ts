@@ -31,6 +31,8 @@ export type MultiplayerGame = Omit<SoloGame, "aiThinking"> & {
   aiThinking: false;
   /** True once any commit-reveal verification failed (Task 15 renders the screen). */
   hasViolation: boolean;
+  /** First violation message while `hasViolation`, else null. */
+  violationReason: string | null;
   /** Forfeit the (disconnected) opponent; multiplayer-only, so not on SoloGame. */
   claimWin: () => void;
   /** True once MY rematch vote is observed; multiplayer-only. */
@@ -105,6 +107,7 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
     placePending: (handIndex) => placePending(ctx, legalHands, handIndex),
     replace: (handIndex) => replace(ctx, handIndex),
     hasViolation: protocolHandle.violated,
+    violationReason: protocolHandle.violationReason,
     timeout: () => timeout(ctx),
     claimWin: () => claimWin(ctx),
     playAgain: () => playAgain(ctx),
