@@ -8,7 +8,7 @@ import { fetchReveals, publishEvent, publishReveal, subscribeToEvents } from "..
 import { createProtocolState } from "../../../crypto/protocolController";
 import { useGameEngine } from "../useGameEngine";
 import type { MultiplayerCtx } from "./context";
-import { before, deck, dealt, drawn, endTurn, fakeCtx } from "./testCtx";
+import { before, deck, dealt, drawn, endTurn, fakeCtx } from "./testkit";
 import { useTurnDraws } from "./useTurnDraws";
 import { applyHead, enqueueOnce, useOpponentEvents, type Queued } from "./useOpponentEvents";
 

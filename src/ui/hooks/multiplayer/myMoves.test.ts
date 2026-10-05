@@ -7,7 +7,7 @@ import { derivePlacementSalt } from "../../../crypto/protocol";
 import { commitPlacement, createProtocolState } from "../../../crypto/protocolController";
 import { publishTurnStarted } from "../../../net/roomState";
 import { claimWin, commitOwnFaceDownCard, placePending, replace, timeout } from "./myMoves";
-import { before, deck, dealt, drawn, endTurn, fakeCtx } from "./testCtx";
+import { before, deck, dealt, drawn, endTurn, fakeCtx } from "./testkit";
 
 vi.mock("../../../net/sync", () => ({ newEventKey: vi.fn(), publishEvent: vi.fn(), publishReveal: vi.fn(), fetchReveals: vi.fn() }));
 vi.mock("../../../net/roomState", () => ({ publishTurnStarted: vi.fn(), publishRematchVote: vi.fn() }));
