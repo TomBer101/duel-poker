@@ -31,13 +31,13 @@ vi.mock("../../sound/gameSounds", () => ({
 type PositionRevealControl = { roomId: string; drawIndex: number; mode: "block" | { delayMs: number } } | null;
 let positionRevealControl: PositionRevealControl = null;
 
-// Stands in for Task 14c's "do not republish what already exists" guards while
-// a late (simulated-refresh) instance is mounted: commitment republishes are
-// dropped (write-once: the real write is denied and the seed IIFE would leave
-// an unhandled rejection), and a player's SECOND placement reveal batch is
-// captured instead of published (the opponent records a duplicate batch as a
-// violation). Everything else the late instance republishes (position / card
-// reveals, turn start) is a harmless idempotent duplicate and goes out as is.
+// Only for the catch-up test, where a late instance runs CONCURRENTLY with the
+// live instance of the same seat (not a real refresh, which unmounts first):
+// both reach the reveal phase together and both publish a batch, before
+// either is in the log for the other's guard to see. A player's SECOND
+// placement reveal batch is therefore captured instead of published (the
+// opponent records a duplicate batch as a violation). The real refresh tests
+// further down use no stubs at all.
 type CatchUpControl = { roomId: string; published: Set<string>; republished: ProtocolReveal[] } | null;
 let catchUpControl: CatchUpControl = null;
 
@@ -45,8 +45,6 @@ vi.mock("../../../net/sync", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../net/sync")>();
   return {
     ...actual,
-    publishCommitments: (...args: Parameters<typeof actual.publishCommitments>) =>
-      catchUpControl?.roomId === args[1] ? Promise.resolve() : actual.publishCommitments(...args),
     publishReveal: (db: Database, roomId: string, reveal: ProtocolReveal) => {
       const u = catchUpControl;
       if (reveal.kind === "placementReveal" && u?.roomId === roomId) {

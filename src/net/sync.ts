@@ -123,6 +123,12 @@ export async function publishCommitments(
   await set(ref(db, `rooms/${roomId}/protocol/commitments/${role}`), commitments);
 }
 
+/** One-shot read of a role's published commitments (null when none yet). */
+export async function fetchCommitments(db: Database, roomId: string, role: ProtocolRole): Promise<string[] | null> {
+  const snapshot = await get(ref(db, `rooms/${roomId}/protocol/commitments/${role}`));
+  return (snapshot.val() as string[] | null) ?? null;
+}
+
 /** Fires `callback` with a role's commitments whenever they're written. */
 export function subscribeToCommitments(
   db: Database,

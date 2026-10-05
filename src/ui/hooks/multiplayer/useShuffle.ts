@@ -21,7 +21,15 @@ import {
 } from "../../../crypto/protocolController";
 import { loadSeed, saveSeed } from "../../../crypto/seedStorage";
 import { DEAL_SLOTS, isFaceDownDraw, replaceDrawIndex } from "../../../crypto/drawSchedule";
-import { publishCommitments, publishReveal, subscribeToCommitments, subscribeToReveals, type ProtocolReveal } from "../../../net/sync";
+import {
+  fetchCommitments,
+  fetchReveals,
+  publishCommitments,
+  publishReveal,
+  subscribeToCommitments,
+  subscribeToReveals,
+  type ProtocolReveal,
+} from "../../../net/sync";
 import { subscribeToDealer } from "../../../net/roomState";
 import type { ShuffleHandle, ShuffleInput } from "./context";
 
@@ -31,8 +39,11 @@ import type { ShuffleHandle, ShuffleInput } from "./context";
  * message (incl. the dealer's card answers).
  */
 export function useShuffle(ctx: ShuffleInput): ShuffleHandle {
-  const { db, roomId, you, gameNumber, state, protocol, protocolTick, bumpTick, updateProtocol, recordViolation } = ctx;
+  const { db, roomId, you, gameNumber, state, protocol, protocolTick, bumpTick, updateProtocol, recordViolation, refs } = ctx;
+  const batchPublishedRef = refs.batchPublished;
   const [dealer, setDealer] = useState<PlayerId | null>(null);
+  // My shuffle state is set and my publish guards are seeded from the log.
+  const [ready, setReady] = useState(false);
   const role = dealer ? (dealer === you ? "dealer" : "selector") : null;
   const dealerState = useRef<DealerCommitmentState | null>(null);
   const selectorState = useRef<SelectorCommitmentState | null>(null);
@@ -46,34 +57,60 @@ export function useShuffle(ctx: ShuffleInput): ShuffleHandle {
   // (write-once) commitments over the new game's.
   useEffect(() => subscribeToDealer(db, roomId, (d) => setDealer((cur) => cur ?? d)), [db, roomId]);
 
-  // Generate my half of the shuffle and publish my 52 commitments.
+  // Set up my half of the shuffle. Refresh-safe: nothing already in the logs
+  // is published again.
+  //  - Commitments: if mine are already published, they must be reproduced
+  //    exactly by my stored seed (salts are seed-deterministic), and are then
+  //    not republished (they are write-once). A missing/invalid seed or a
+  //    mismatch means this game cannot be resumed here: a violation.
+  //  - Reveals: my position reveals (selector), card reveals (dealer) and
+  //    placement batch already in the reveal log prefill the publish guards.
+  // Only then is my state exposed and `ready` set, which also gates the
+  // reveals subscription below, so no replayed message is answered before
+  // the guards are seeded (or before the dealer can answer at all).
   useEffect(() => {
     if (!role) return;
     let cancelled = false;
     (async () => {
+      const [published, log] = await Promise.all([fetchCommitments(db, roomId, role), fetchReveals(db, roomId)]);
+      if (cancelled) return;
       let seed = loadSeed(roomId, gameNumber, you);
       if (!seed) {
+        if (published) {
+          recordViolation(
+            `cannot resume this game: my ${role} seed is missing or invalid in this browser, but my commitments are already published`,
+          );
+          return;
+        }
         seed = generateSeed();
         saveSeed(roomId, gameNumber, you, seed);
       }
-      if (role === "dealer") {
-        const s = await generateDealerCommitments(seed);
-        if (cancelled) return;
-        dealerState.current = s;
-        bumpTick();
-        await publishCommitments(db, roomId, "dealer", s.commitments);
-      } else {
-        const s = await generateSelectorCommitments(seed);
-        if (cancelled) return;
-        selectorState.current = s;
-        bumpTick();
-        await publishCommitments(db, roomId, "selector", s.commitments);
+      const mine = role === "dealer" ? await generateDealerCommitments(seed) : await generateSelectorCommitments(seed);
+      if (cancelled) return;
+      if (published && !sameList(published, mine.commitments)) {
+        recordViolation(`cannot resume this game: my stored seed does not reproduce my published ${role} commitments`);
+        return;
       }
-    })();
+      for (const r of log) {
+        if (r.by !== you) continue;
+        if (r.kind === "position") publishedPosition.current.add(r.drawIndex);
+        else if (r.kind === "card") publishedCard.current.add(r.position);
+        else if (r.kind === "placementReveal") batchPublishedRef.current = true;
+      }
+      if ("deck" in mine) dealerState.current = mine;
+      else selectorState.current = mine;
+      setReady(true);
+      bumpTick();
+      if (!published) await publishCommitments(db, roomId, role, mine.commitments);
+    })().catch((err: unknown) => {
+      if (cancelled) return;
+      console.error("[useMultiplayerGame] shuffle setup failed", err);
+      recordViolation(`shuffle setup failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- bumpTick only touches state setters and a ref (stable in effect); deps unchanged from the pre-split hook
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- bumpTick/recordViolation only touch state setters and refs (stable in effect)
   }, [db, roomId, gameNumber, you, role]);
 
   // Learn the opponent's (and echo of my own) commitments.
@@ -149,7 +186,7 @@ export function useShuffle(ctx: ShuffleInput): ShuffleHandle {
   // Handle every incoming protocol message: verify it, and if I'm the
   // dealer, answer a fresh position reveal with the matching card reveal.
   useEffect(() => {
-    if (!role || !dealer) return;
+    if (!role || !dealer || !ready) return;
     return subscribeToReveals(db, roomId, (reveal: ProtocolReveal) => {
       if (reveal.kind === "position") {
         updateProtocol(`position reveal ${reveal.drawIndex}`, async (cur) => {
@@ -219,7 +256,9 @@ export function useShuffle(ctx: ShuffleInput): ShuffleHandle {
         publishedCard.current.delete(position);
       });
     }
-  }, [db, roomId, you, role, dealer]);
+  }, [db, roomId, you, role, dealer, ready]);
 
   return { dealer, role, dealerState, selectorState };
 }
+
+const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);

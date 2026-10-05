@@ -15,8 +15,7 @@ const BATCH_RETRY_DELAY_MS = 500;
 export function useRevealPhase(ctx: MultiplayerCtx): void {
   const { db, roomId, you, role, state, dispatch, hasPendingDispatch, protocol, dealerState, bumpTick, updateProtocol, recordViolation, warnOnce, refs } =
     ctx;
-  const { ownSlotDraw } = refs;
-  const batchPublished = useRef(false);
+  const { ownSlotDraw, batchPublished: batchPublishedRef } = refs;
   const batchFailures = useRef(0);
   const verifyQueued = useRef(false);
   const revealDispatched = useRef(false);
@@ -27,8 +26,8 @@ export function useRevealPhase(ctx: MultiplayerCtx): void {
   // the reveal to the dealer's own deck commitments (not just its placement
   // commitment, which a cheating dealer could have fabricated for any card).
   useEffect(() => {
-    if (!role || hasPendingDispatch() || state.phase !== "reveal" || batchPublished.current) return;
-    batchPublished.current = true;
+    if (!role || hasPendingDispatch() || state.phase !== "reveal" || batchPublishedRef.current) return;
+    batchPublishedRef.current = true;
     const entries: { handIndex: number; card: Card; drawIndex: number; position: number }[] = [];
     if (role === "dealer") {
       for (let handIndex = 0; handIndex < HANDS_PER_PLAYER; handIndex++) {
@@ -41,7 +40,7 @@ export function useRevealPhase(ctx: MultiplayerCtx): void {
             `own face-down card/draw for hand ${handIndex} missing; batch not published`,
           );
           recordViolation(`own face-down card/draw for hand ${handIndex} missing`);
-          batchPublished.current = false;
+          batchPublishedRef.current = false;
           return;
         }
         entries.push({ handIndex, card, drawIndex, position });
@@ -69,7 +68,7 @@ export function useRevealPhase(ctx: MultiplayerCtx): void {
           recordViolation(`placement reveal batch failed to publish after ${batchFailures.current} attempts`);
           return; // stop retrying, stay latched as a hard failure
         }
-        batchPublished.current = false; // allow a retry
+        batchPublishedRef.current = false; // allow a retry
         setTimeout(bumpTick, BATCH_RETRY_DELAY_MS); // force the next render to re-run this effect
       });
   });

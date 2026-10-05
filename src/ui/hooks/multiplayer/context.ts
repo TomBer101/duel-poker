@@ -48,6 +48,11 @@ export type SharedRefs = {
   claimedWin: RefObject<boolean>;
   // My rematch vote is published (or in flight) for this game: once per mount.
   rematchVoted: RefObject<boolean>;
+  // My placement reveal batch is published (or in flight): set by the reveal
+  // phase, and prefilled by useShuffle from the reveal log on mount so a
+  // refreshed client never publishes a second batch (a violation for the
+  // opponent).
+  batchPublished: RefObject<boolean>;
   // Push keys of events already applied (or being published by me): the
   // intake applies every other event in the log exactly once.
   seenKeys: RefObject<Set<string>>;
@@ -70,5 +75,5 @@ export type MultiplayerCtx = ProtocolHandle &
     refs: SharedRefs;
   };
 
-/** What `useShuffle` needs: the ctx minus what it produces itself (and the shared refs). */
-export type ShuffleInput = Omit<MultiplayerCtx, keyof ShuffleHandle | "refs">;
+/** What `useShuffle` needs: the ctx minus what it produces itself. */
+export type ShuffleInput = Omit<MultiplayerCtx, keyof ShuffleHandle>;

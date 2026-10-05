@@ -9,6 +9,7 @@ import {
   subscribeToPresence,
   subscribeToConnection,
   publishCommitments,
+  fetchCommitments,
   publishReveal,
   subscribeToCommitments,
   subscribeToReveals,
@@ -142,6 +143,13 @@ describe("publishCommitments / subscribeToCommitments", () => {
     await vi.waitFor(() => expect(received).toHaveLength(1));
     expect(received[0]).toEqual(["h0", "h1"]);
     unsubscribe();
+  });
+
+  test("fetchCommitments reads a role's commitments once (null before any)", async () => {
+    expect(await fetchCommitments(db, roomId, "selector")).toBeNull();
+    await publishCommitments(db, roomId, "selector", ["s0", "s1"]);
+    expect(await fetchCommitments(db, roomId, "selector")).toEqual(["s0", "s1"]);
+    expect(await fetchCommitments(db, roomId, "dealer")).toBeNull();
   });
 });
 

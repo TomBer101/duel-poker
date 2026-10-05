@@ -61,6 +61,7 @@ export function fakeCtx(state: GameState, you: PlayerId, role: "dealer" | "selec
       rematchVoted: { current: false },
       seenKeys: { current: new Set<string>() },
       lastSeq: { current: 0 },
+      batchPublished: { current: false },
     },
   };
   return ctx as typeof ctx & MultiplayerCtx;
