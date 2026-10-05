@@ -77,7 +77,9 @@ export function useOpponentEvents(ctx: MultiplayerCtx): void {
   // re-renders, which re-runs this effect for the next one. No dep array: it
   // must re-check after every render/tick, since the card an END_TURN waits on
   // can resolve after the event itself arrived.
-  useEffect(() => applyHead(ctx, queue, ownHiddenTimeoutDeadline));
+  // Failed own-hidden-timeout commits so far (bounded retry, see handleTimeout).
+  const translationFailures = useRef(0);
+  useEffect(() => applyHead(ctx, queue, ownHiddenTimeoutDeadline, translationFailures));
 }
 
 /**
@@ -88,7 +90,12 @@ export function useOpponentEvents(ctx: MultiplayerCtx): void {
  * (the rules enforce both). Skipped while an earlier effect of this commit has
  * dispatched (stale `state`); the re-render re-runs it.
  */
-export function applyHead(ctx: MultiplayerCtx, queue: Queue, deadline: Deadline): void {
+export function applyHead(
+  ctx: MultiplayerCtx,
+  queue: Queue,
+  deadline: Deadline,
+  failures: RefObject<number> = { current: 0 },
+): void {
   if (!ctx.role || ctx.hasPendingDispatch()) return;
   const head = queue.current[0];
   if (!head) return;
@@ -100,15 +107,15 @@ export function applyHead(ctx: MultiplayerCtx, queue: Queue, deadline: Deadline)
     return;
   }
   if (head.seq > lastSeq.current + 1) return; // gap: wait for the missing event
-  dispatchHead(ctx, queue, deadline, head.event);
+  dispatchHead(ctx, queue, deadline, failures, head.event);
   if (queue.current[0] !== head) lastSeq.current = head.seq; // consumed (applied or rejected)
 }
 
-function dispatchHead(ctx: MultiplayerCtx, queue: Queue, deadline: Deadline, event: GameEvent): void {
+function dispatchHead(ctx: MultiplayerCtx, queue: Queue, deadline: Deadline, failures: RefObject<number>, event: GameEvent): void {
   if (event.type === "REPLACE") {
     handleReplace(ctx, queue, event);
   } else if (event.type === "TIMEOUT" || event.type === "TIMEOUT_HIDDEN") {
-    handleTimeout(ctx, queue, deadline, event);
+    handleTimeout(ctx, queue, deadline, failures, event);
   } else if (event.type === "END_TURN") {
     handleEndTurn(ctx, queue, event);
   } else if (event.type === "FORFEIT") {
@@ -169,7 +176,13 @@ function handleReplace(ctx: MultiplayerCtx, queue: Queue, event: ReplaceEvent): 
   if (by === you && role === "dealer" && handIndex !== null) refs.ownSlotDraw.current.set(handIndex, drawIndex);
 }
 
-function handleTimeout(ctx: MultiplayerCtx, queue: Queue, deadline: Deadline, event: TimeoutEvent): void {
+function handleTimeout(
+  ctx: MultiplayerCtx,
+  queue: Queue,
+  deadline: Deadline,
+  failures: RefObject<number>,
+  event: TimeoutEvent,
+): void {
   const { you, state, dispatch, bumpTick, recordViolation, refs } = ctx;
   const { placedForDraw, timedOutOwnHiddenForDraw } = refs;
   // Self-contained (TIMEOUT carries its own card; TIMEOUT_HIDDEN carries
@@ -227,20 +240,26 @@ function handleTimeout(ctx: MultiplayerCtx, queue: Queue, deadline: Deadline, ev
       dispatch(event);
       return;
     }
-    if (timedOutOwnHiddenForDraw.current === state.drawCount) return; // already in flight
+    // In flight: the head STAYS queued (nothing behind it may overtake it) and
+    // this guard parks every re-run until the async commit settles.
+    if (timedOutOwnHiddenForDraw.current === state.drawCount) return;
     // Cross-guard against a narrow race with placePending: if I already
     // (or concurrently) placed this same draw myself via the UI, don't
     // also commit+dispatch a translated TIMEOUT for it.
     if (placedForDraw.current === state.drawCount) return;
-    timedOutOwnHiddenForDraw.current = state.drawCount;
-    queue.current.shift();
+    const turnDraw = state.drawCount;
+    timedOutOwnHiddenForDraw.current = turnDraw;
+    const head = queue.current[0];
     const card = state.pendingCard;
     const handIndex = getAutoPlaceIndex(state.hands[you]);
-    const drawIndex = state.drawCount - 1;
-    // ponytail: on catch-up this republishes the (deterministic, identical)
-    // placementCommit; Task 14c seeds the guards from the reveal log.
+    const drawIndex = turnDraw - 1;
     commitOwnFaceDownCard(ctx, handIndex, card, drawIndex).then(
       () => {
+        // Consume the head only now, then apply: in log order, before
+        // anything queued behind it.
+        failures.current = 0;
+        queue.current.shift();
+        ctx.refs.lastSeq.current = head.seq;
         try {
           dispatch({ type: "TIMEOUT", by: event.by, card });
         } catch (err) {
@@ -251,10 +270,22 @@ function handleTimeout(ctx: MultiplayerCtx, queue: Queue, deadline: Deadline, ev
         }
       },
       (err: unknown) => {
+        // Transient (reveal-log read / commit publish): leave the head queued
+        // and retry; only a persistent failure consumes it as a violation.
         console.error("[useMultiplayerGame] failed to commit own hidden-timeout card", err);
+        failures.current += 1;
+        timedOutOwnHiddenForDraw.current = null;
+        if (failures.current < MAX_OWN_HIDDEN_TIMEOUT_RETRIES) {
+          setTimeout(bumpTick, OWN_HIDDEN_TIMEOUT_RETRY_DELAY_MS);
+          return;
+        }
+        failures.current = 0;
+        queue.current.shift();
+        ctx.refs.lastSeq.current = head.seq;
         recordViolation(
           `failed to commit own hidden-timeout card: ${err instanceof Error ? err.message : String(err)}`,
         );
+        bumpTick();
       },
     );
     return;

@@ -4,7 +4,7 @@ import { describe, expect, test, vi } from "vitest";
 import { createInitialState, gameReducer } from "../../../engine/reducer";
 import { autoPlacePlacingPhase } from "../../../engine/testkit";
 import type { GameEvent } from "../../../engine/types";
-import { publishEvent, publishReveal } from "../../../net/sync";
+import { fetchReveals, publishEvent, publishReveal } from "../../../net/sync";
 import { createProtocolState } from "../../../crypto/protocolController";
 import { useGameEngine } from "../useGameEngine";
 import type { MultiplayerCtx } from "./context";
@@ -17,6 +17,7 @@ vi.mock("../../../net/sync", () => ({
   publishEvent: vi.fn(),
   publishReveal: vi.fn(),
   newEventKey: vi.fn(),
+  fetchReveals: vi.fn(),
 }));
 vi.mock("../../sound/gameSounds", () => ({ playEventSfx: () => {}, playResultSting: () => {} }));
 vi.mock("../../../net/roomState", () => ({ publishTurnStarted: vi.fn(), publishRematchVote: vi.fn() }));
@@ -225,5 +226,75 @@ describe("same-commit stale snapshot (intake + per-turn DRAW effect)", () => {
     const { trigger } = harness(false);
     vi.spyOn(console, "error").mockImplementation(() => {});
     expect(trigger).toThrow(/not p2's turn/);
+  });
+});
+
+describe("own hidden-timeout translation (TIMEOUT_HIDDEN about me, the dealer)", () => {
+  /** p1 (dealer) on its hidden draw-40 turn with its card resolved; the
+   *  opponent's TIMEOUT_HIDDEN at seq 1, then a FORFEIT of mine at seq 2. */
+  function setup() {
+    const ctx = fakeCtx(drawn(before(40)), "p1", "dealer");
+    const queue = {
+      current: [
+        { key: "a", seq: 1, event: { type: "TIMEOUT_HIDDEN", by: "p1" } },
+        { key: "b", seq: 2, event: { type: "FORFEIT", by: "p1" } },
+      ] as Queued[],
+    };
+    const failures = { current: 0 };
+    const step = () => applyHead(ctx, queue, { current: null }, failures);
+    return { ctx, queue, failures, step };
+  }
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  test("while the commit is in flight the head stays queued and nothing behind it overtakes", async () => {
+    vi.mocked(publishReveal).mockResolvedValue();
+    let release!: () => void;
+    vi.mocked(fetchReveals).mockReturnValue(new Promise((resolve) => (release = () => resolve([]))));
+    const { ctx, queue, step } = setup();
+    step();
+    step(); // a re-run while in flight is parked on the guard
+    expect(queue.current.map((q) => q.seq)).toEqual([1, 2]);
+    expect(ctx.refs.lastSeq.current).toBe(0);
+    expect(ctx.dispatch).not.toHaveBeenCalled();
+
+    release();
+    await flush();
+    expect(queue.current.map((q) => q.seq)).toEqual([2]);
+    expect(ctx.refs.lastSeq.current).toBe(1);
+    expect(ctx.dispatch).toHaveBeenCalledTimes(1);
+    expect(ctx.dispatch).toHaveBeenCalledWith({ type: "TIMEOUT", by: "p1", card: ctx.state.pendingCard });
+    expect(ctx.refs.ownSlotDraw.current.get(0)).toBe(40);
+  });
+
+  test("a transient failure leaves the head queued and retries; persistent failure is a violation", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(publishReveal).mockResolvedValue();
+    vi.mocked(fetchReveals).mockRejectedValueOnce(new Error("network"));
+    const { ctx, queue, failures, step } = setup();
+    step();
+    await flush();
+    expect(queue.current).toHaveLength(2); // not consumed
+    expect(ctx.refs.lastSeq.current).toBe(0);
+    expect(ctx.refs.timedOutOwnHiddenForDraw.current).toBeNull(); // guard cleared for the retry
+    expect(ctx.recordViolation).not.toHaveBeenCalled();
+    expect(failures.current).toBe(1);
+
+    vi.mocked(fetchReveals).mockResolvedValueOnce([]);
+    step(); // the retry
+    await flush();
+    expect(queue.current.map((q) => q.seq)).toEqual([2]);
+    expect(ctx.dispatch).toHaveBeenCalledWith({ type: "TIMEOUT", by: "p1", card: ctx.state.pendingCard });
+    expect(failures.current).toBe(0);
+
+    const exhausted = setup();
+    vi.mocked(fetchReveals).mockRejectedValue(new Error("down"));
+    for (let i = 0; i < 3; i++) {
+      exhausted.step();
+      await flush();
+    }
+    expect(exhausted.queue.current.map((q) => q.seq)).toEqual([2]);
+    expect(exhausted.ctx.refs.lastSeq.current).toBe(1);
+    expect(exhausted.ctx.dispatch).not.toHaveBeenCalled();
+    expect(exhausted.ctx.recordViolation).toHaveBeenCalledWith(expect.stringMatching(/failed to commit own hidden-timeout card/));
   });
 });
