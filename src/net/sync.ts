@@ -23,9 +23,11 @@ export type PublishOptions = {
 /**
  * Appends an event under /rooms/{roomId}/events/{key} carrying `seq`, and in
  * the same multi-path write bumps /meta/eventSeq to `seq` (the rules require
- * `seq == previous counter + 1`, so exactly one writer wins each position:
- * push keys alone are NOT causally ordered across clients) and, when given,
- * sets /meta/turn. Resolves to the key used.
+ * `seq == previous counter + 1`, so of two racing writers for the same
+ * position only one is accepted; push keys alone are NOT causally ordered
+ * across clients). Not a uniqueness guarantee: a single (hostile) update can
+ * still carry two events with the same seq, which the intake rejects. When
+ * given, also sets /meta/turn. Resolves to the key used.
  */
 export async function publishEvent(
   db: Database,

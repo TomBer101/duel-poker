@@ -38,6 +38,7 @@ async function publishThenApply(ctx: MultiplayerCtx, event: GameEvent, nextTurn?
     await publishEvent(db, roomId, event, { seq, nextTurn, key });
   } catch (err) {
     console.warn(`[useMultiplayerGame] ${event.type} (seq ${seq}) was not accepted; local state unchanged`, err);
+    ctx.bumpTick(); // re-check the queue now (a head may be parked on my in-flight guard)
     return false;
   }
   // Position `seq` is mine: the intake (which skips my key) moves past it.
@@ -122,6 +123,7 @@ export async function replace(ctx: MultiplayerCtx, handIndex: number | null): Pr
     } catch (err) {
       console.error("[useMultiplayerGame] failed to commit replacement", err);
       replacedForDraw.current = null;
+      ctx.bumpTick();
       return;
     }
   }
@@ -232,6 +234,7 @@ export async function placePending(ctx: MultiplayerCtx, legalHands: number[], ha
     } catch (err) {
       console.error("[useMultiplayerGame] failed to commit face-down placement", err);
       placedForDraw.current = null; // allow a retry
+      ctx.bumpTick();
       return;
     }
   }

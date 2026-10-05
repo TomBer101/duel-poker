@@ -101,8 +101,11 @@ export function applyHead(
   if (!head) return;
   const { lastSeq } = ctx.refs;
   if (head.seq <= lastSeq.current) {
-    // Already applied (e.g. my own move, applied on its ack): drop it.
-    queue.current.shift();
+    // A second event at an already-applied position. My own moves never get
+    // here (their keys are in seenKeys), and the rules give each counter value
+    // one event per update; but one update can carry two events with the same
+    // seq, so this is a protocol violation, not a benign duplicate.
+    reject(ctx, queue, `event ${head.key} at seq ${head.seq} repeats an already-applied position (last ${lastSeq.current})`);
     ctx.bumpTick();
     return;
   }

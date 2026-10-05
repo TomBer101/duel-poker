@@ -4,7 +4,7 @@ import { autoPlacePlacingPhase } from "../../../engine/testkit";
 import type { GameState } from "../../../engine/types";
 import { fetchReveals, newEventKey, publishEvent, publishReveal } from "../../../net/sync";
 import { derivePlacementSalt } from "../../../crypto/protocol";
-import { commitPlacement } from "../../../crypto/protocolController";
+import { commitPlacement, createProtocolState } from "../../../crypto/protocolController";
 import { publishTurnStarted } from "../../../net/roomState";
 import { claimWin, commitOwnFaceDownCard, placePending, replace, timeout } from "./myMoves";
 import { before, deck, dealt, drawn, endTurn, fakeCtx } from "./testCtx";
@@ -112,7 +112,17 @@ describe("a rules denial leaves local state untouched and clears the in-flight g
     expect(publishReveal).toHaveBeenCalledTimes(committed ? 1 : 0);
     expect(publishTurnStarted).not.toHaveBeenCalled();
     expect(ctx.refs.lastSeq.current).toBe(0); // position not taken: abandoned cleanly
+    expect(ctx.bumpTick).toHaveBeenCalled(); // the queue re-checks without waiting for another render
   });
+});
+
+test("the selector's own TIMEOUT_HIDDEN report records the dealer's hidden draw", async () => {
+  const ctx = fakeCtx(before(40), "p2", "selector"); // p1 (dealer) on its hidden draw-40 turn
+  await timeout(ctx);
+  expect(ctx.dispatch).toHaveBeenCalledWith({ type: "TIMEOUT_HIDDEN", by: "p1" });
+  expect(ctx.updateProtocol).toHaveBeenCalledWith("hidden timeout draw", expect.any(Function));
+  const step = ctx.updateProtocol.mock.calls[0][1] as (s: ReturnType<typeof createProtocolState>) => ReturnType<typeof createProtocolState>;
+  expect(step(createProtocolState()).hiddenDraws).toEqual({ 0: 40 });
 });
 
 describe("commitOwnFaceDownCard (own hidden-timeout translation)", () => {

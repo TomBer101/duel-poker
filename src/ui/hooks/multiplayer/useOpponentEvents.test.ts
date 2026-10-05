@@ -76,11 +76,13 @@ describe("applyHead — seq order", () => {
     expect(ctx.refs.lastSeq.current).toBe(1);
   });
 
-  test("a head at or below lastSeq (already applied) is dropped without dispatch", () => {
+  test("a head at or below lastSeq (a repeated position) is rejected as a violation, never applied", () => {
     const ctx = fakeCtx(drawn(before(10)), "p1", "selector");
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     ctx.refs.lastSeq.current = 3;
     expect(runAt(ctx, [{ seq: 3, event: endTurn("p1", 0) }])).toHaveLength(0);
     expect(ctx.dispatch).not.toHaveBeenCalled();
+    expect(ctx.recordViolation).toHaveBeenCalledWith(expect.stringMatching(/seq 3 repeats an already-applied position/));
     expect(ctx.refs.lastSeq.current).toBe(3);
   });
 
@@ -244,7 +246,6 @@ describe("own hidden-timeout translation (TIMEOUT_HIDDEN about me, the dealer)",
     const step = () => applyHead(ctx, queue, { current: null }, failures);
     return { ctx, queue, failures, step };
   }
-  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
   test("while the commit is in flight the head stays queued and nothing behind it overtakes", async () => {
     vi.mocked(publishReveal).mockResolvedValue();
@@ -258,8 +259,7 @@ describe("own hidden-timeout translation (TIMEOUT_HIDDEN about me, the dealer)",
     expect(ctx.dispatch).not.toHaveBeenCalled();
 
     release();
-    await flush();
-    expect(queue.current.map((q) => q.seq)).toEqual([2]);
+    await vi.waitFor(() => expect(queue.current.map((q) => q.seq)).toEqual([2]));
     expect(ctx.refs.lastSeq.current).toBe(1);
     expect(ctx.dispatch).toHaveBeenCalledTimes(1);
     expect(ctx.dispatch).toHaveBeenCalledWith({ type: "TIMEOUT", by: "p1", card: ctx.state.pendingCard });
@@ -272,25 +272,23 @@ describe("own hidden-timeout translation (TIMEOUT_HIDDEN about me, the dealer)",
     vi.mocked(fetchReveals).mockRejectedValueOnce(new Error("network"));
     const { ctx, queue, failures, step } = setup();
     step();
-    await flush();
+    await vi.waitFor(() => expect(failures.current).toBe(1));
     expect(queue.current).toHaveLength(2); // not consumed
     expect(ctx.refs.lastSeq.current).toBe(0);
     expect(ctx.refs.timedOutOwnHiddenForDraw.current).toBeNull(); // guard cleared for the retry
     expect(ctx.recordViolation).not.toHaveBeenCalled();
-    expect(failures.current).toBe(1);
 
     vi.mocked(fetchReveals).mockResolvedValueOnce([]);
     step(); // the retry
-    await flush();
-    expect(queue.current.map((q) => q.seq)).toEqual([2]);
+    await vi.waitFor(() => expect(queue.current.map((q) => q.seq)).toEqual([2]));
     expect(ctx.dispatch).toHaveBeenCalledWith({ type: "TIMEOUT", by: "p1", card: ctx.state.pendingCard });
     expect(failures.current).toBe(0);
 
     const exhausted = setup();
     vi.mocked(fetchReveals).mockRejectedValue(new Error("down"));
-    for (let i = 0; i < 3; i++) {
+    for (let i = 1; i <= 3; i++) {
       exhausted.step();
-      await flush();
+      await vi.waitFor(() => expect(exhausted.failures.current === i || exhausted.queue.current.length === 1).toBe(true));
     }
     expect(exhausted.queue.current.map((q) => q.seq)).toEqual([2]);
     expect(exhausted.ctx.refs.lastSeq.current).toBe(1);
