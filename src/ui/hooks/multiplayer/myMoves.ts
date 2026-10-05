@@ -4,7 +4,7 @@ import { getAutoPlaceIndex, isFaceDownPlacement } from "../../../engine/placemen
 import type { Card, GameEvent, PlayerId } from "../../../engine/types";
 import { derivePlacementSalt } from "../../../crypto/protocol";
 import { commitPlacement, recordHiddenDraw } from "../../../crypto/protocolController";
-import { isFaceDownDraw, validReplaceHand } from "../../../crypto/drawSchedule";
+import { DEAL_SLOTS, isFaceDownDraw, validReplaceHand } from "../../../crypto/drawSchedule";
 import { fetchReveals, newEventKey, publishEvent, publishReveal } from "../../../net/sync";
 import { publishRematchVote, publishTurnStarted } from "../../../net/roomState";
 import type { MultiplayerCtx } from "./context";
@@ -188,11 +188,12 @@ export async function timeout(ctx: MultiplayerCtx): Promise<void> {
  * Claims a win against a disconnected opponent: publishes, then applies, a
  * FORFEIT naming the OPPONENT (the forfeiting player). Trusted as-is: presence
  * is written by the opponent's own onDisconnect, not forgeable by the claimer.
- * No-op before setup, while a claim is in flight, or once the game has a result.
+ * No-op before the opening deal (every logged event must follow the DEAL, see
+ * applyHead), while a claim is in flight, or once the game has a result.
  */
 export async function claimWin(ctx: MultiplayerCtx): Promise<void> {
   const { you, role, state, refs } = ctx;
-  if (!role || state.phase === "result" || refs.claimedWin.current) return;
+  if (!role || state.drawCount < DEAL_SLOTS.length || state.phase === "result" || refs.claimedWin.current) return;
   refs.claimedWin.current = true;
   if (!(await publishThenApply(ctx, { type: "FORFEIT", by: otherPlayer(you) }))) refs.claimedWin.current = false;
 }

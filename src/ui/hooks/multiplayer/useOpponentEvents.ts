@@ -3,7 +3,7 @@ import { CARDS_PER_HAND } from "../../../engine/constants";
 import { getAutoPlaceIndex, getLegalHands, isFaceDownPlacement } from "../../../engine/placement";
 import type { GameEvent, GameState } from "../../../engine/types";
 import { recordHiddenDraw } from "../../../crypto/protocolController";
-import { isFaceDownDraw, replaceDrawIndex, validReplaceHand } from "../../../crypto/drawSchedule";
+import { DEAL_SLOTS, isFaceDownDraw, replaceDrawIndex, validReplaceHand } from "../../../crypto/drawSchedule";
 import { subscribeToEvents } from "../../../net/sync";
 import type { MultiplayerCtx } from "./context";
 import { commitOwnFaceDownCard } from "./myMoves";
@@ -88,7 +88,9 @@ export function useOpponentEvents(ctx: MultiplayerCtx): void {
  * fill. Author: END_TURN/REPLACE are written by `by`; TIMEOUT/TIMEOUT_HIDDEN/
  * FORFEIT name the AFFECTED player in `by` and are written by the other seat
  * (the rules enforce both). Skipped while an earlier effect of this commit has
- * dispatched (stale `state`); the re-render re-runs it.
+ * dispatched (stale `state`); the re-render re-runs it. Nothing is applied
+ * before the local DEAL: it is derived from the reveal log, not an event, and
+ * every logged event follows it (on a refresh the events can arrive first).
  */
 export function applyHead(
   ctx: MultiplayerCtx,
@@ -96,7 +98,7 @@ export function applyHead(
   deadline: Deadline,
   failures: RefObject<number> = { current: 0 },
 ): void {
-  if (!ctx.role || ctx.hasPendingDispatch()) return;
+  if (!ctx.role || ctx.hasPendingDispatch() || ctx.state.drawCount < DEAL_SLOTS.length) return;
   const head = queue.current[0];
   if (!head) return;
   const { lastSeq } = ctx.refs;

@@ -71,15 +71,18 @@ export function useShuffle(ctx: ShuffleInput): ShuffleHandle {
   useEffect(() => {
     if (!role) return;
     let cancelled = false;
+    const cannotResume = (why: string) => {
+      const message = `cannot resume this game: ${why}`;
+      console.error(`[useMultiplayerGame] ${message}`);
+      recordViolation(message);
+    };
     (async () => {
       const [published, log] = await Promise.all([fetchCommitments(db, roomId, role), fetchReveals(db, roomId)]);
       if (cancelled) return;
       let seed = loadSeed(roomId, gameNumber, you);
       if (!seed) {
         if (published) {
-          recordViolation(
-            `cannot resume this game: my ${role} seed is missing or invalid in this browser, but my commitments are already published`,
-          );
+          cannotResume(`my ${role} seed is missing or invalid in this browser, but my commitments are already published`);
           return;
         }
         seed = generateSeed();
@@ -88,7 +91,7 @@ export function useShuffle(ctx: ShuffleInput): ShuffleHandle {
       const mine = role === "dealer" ? await generateDealerCommitments(seed) : await generateSelectorCommitments(seed);
       if (cancelled) return;
       if (published && !sameList(published, mine.commitments)) {
-        recordViolation(`cannot resume this game: my stored seed does not reproduce my published ${role} commitments`);
+        cannotResume(`my stored seed does not reproduce my published ${role} commitments`);
         return;
       }
       for (const r of log) {

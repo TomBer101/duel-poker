@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { gameReducer } from "../../../engine/reducer";
+import { createInitialState, gameReducer } from "../../../engine/reducer";
 import { autoPlacePlacingPhase } from "../../../engine/testkit";
 import type { GameState } from "../../../engine/types";
 import { fetchReveals, newEventKey, publishEvent, publishReveal } from "../../../net/sync";
@@ -162,4 +162,11 @@ test("claimWin publishes once while a claim is in flight", async () => {
   await Promise.all([claimWin(ctx), claimWin(ctx)]);
   expect(publishEvent).toHaveBeenCalledTimes(1);
   expect(ctx.dispatch).toHaveBeenCalledWith({ type: "FORFEIT", by: "p2" });
+});
+
+test("claimWin is a no-op before the opening deal", async () => {
+  const ctx = fakeCtx(createInitialState({ mode: "multiplayer" }), "p1", "dealer");
+  await claimWin(ctx);
+  expect(publishEvent).not.toHaveBeenCalled();
+  expect(ctx.dispatch).not.toHaveBeenCalled();
 });

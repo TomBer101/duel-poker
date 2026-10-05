@@ -172,6 +172,13 @@ describe("applyHead — own-authored events (catch-up)", () => {
     expect(run(forfeit, { type: "FORFEIT", by: "p2" })).toHaveLength(0);
     expect(forfeit.dispatch).toHaveBeenCalledWith({ type: "FORFEIT", by: "p2" });
   });
+
+  test("nothing is applied before the local DEAL (a refresh can deliver events first)", () => {
+    const ctx = fakeCtx(createInitialState({ mode: "multiplayer" }), "p1", "dealer");
+    expect(run(ctx, { type: "FORFEIT", by: "p2" })).toHaveLength(1);
+    expect(ctx.dispatch).not.toHaveBeenCalled();
+    expect(ctx.refs.lastSeq.current).toBe(0);
+  });
 });
 
 describe("same-commit stale snapshot (intake + per-turn DRAW effect)", () => {
