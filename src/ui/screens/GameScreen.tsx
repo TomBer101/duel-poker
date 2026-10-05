@@ -97,9 +97,10 @@ function GameScreenBody({ roomId, gameNumber = 1, you: seat = "p1" }: GameScreen
     gameNumber,
   });
   // Both hooks always run (hooks can't be called conditionally); only one
-  // result is used. `useMultiplayerGame` no-ops its Firebase subscriptions
-  // when `roomId` is empty (`role` never resolves for an empty room id, and
-  // every effect guards on `role`).
+  // result is used. With an empty `roomId`, `useMultiplayerGame` opens no
+  // Firebase listener: the room-level subscriptions (dealer, events, rematch,
+  // presence) guard on `roomId`, and every protocol effect waits on `role`,
+  // which only the dealer subscription can resolve.
   const g = roomId ? multiplayer : solo;
 
   const you = multiplayer.you;

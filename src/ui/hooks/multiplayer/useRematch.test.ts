@@ -116,3 +116,11 @@ describe("playAgain", () => {
     expect(h.publishRematchVote).toHaveBeenCalledWith({}, "R", "p1");
   });
 });
+
+describe("useRematch without a room (solo)", () => {
+  test("opens no rematch listener", () => {
+    h.deliver = null;
+    renderHook(() => useRematch(makeCtx({ roomId: "" })));
+    expect(h.deliver).toBeNull();
+  });
+});

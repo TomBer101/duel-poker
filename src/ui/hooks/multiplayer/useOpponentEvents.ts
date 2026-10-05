@@ -65,10 +65,12 @@ export function useOpponentEvents(ctx: MultiplayerCtx): void {
   // ONE subscription for the game's lifetime; `onChildAdded` replays history
   // and echoes my own writes, both deduped by push key in enqueueOnce.
   useEffect(
-    () =>
-      subscribeToEvents(db, roomId, (event, key, seq) => {
+    () => {
+      if (!roomId) return; // solo: no room, no listener
+      return subscribeToEvents(db, roomId, (event, key, seq) => {
         if (enqueueOnce(refs.seenKeys.current, queue.current, event, key, seq)) bumpTick();
-      }),
+      });
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- bumpTick only touches state setters and a ref, refs are stable; deps unchanged from the pre-split hook
     [db, roomId],
   );

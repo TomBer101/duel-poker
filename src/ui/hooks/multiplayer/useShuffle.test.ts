@@ -3,6 +3,7 @@ import { renderHook } from "@testing-library/react";
 import { createInitialState } from "../../../engine/reducer";
 import { createProtocolState } from "../../../crypto/protocolController";
 import { fetchCommitments, fetchReveals, publishCommitments } from "../../../net/sync";
+import { subscribeToDealer } from "../../../net/roomState";
 import type { ShuffleInput } from "./context";
 import { useShuffle } from "./useShuffle";
 
@@ -23,10 +24,10 @@ vi.mock("../../../net/roomState", () => ({
 
 const failure = () => Promise.reject(new Error("network"));
 
-function setup() {
+function setup(roomId = "R") {
   const ctx = {
     db: {},
-    roomId: "R",
+    roomId,
     you: "p1",
     gameNumber: 1,
     state: createInitialState({ mode: "multiplayer" }),
@@ -113,5 +114,13 @@ describe("useShuffle setup", () => {
     await vi.waitFor(() => expect(again.ctx.refs.resumed.current).toBe(true));
     expect(publishCommitments).toHaveBeenCalledTimes(1);
     expect(again.ctx.recordViolation).not.toHaveBeenCalled();
+  });
+});
+
+describe("useShuffle without a room (solo)", () => {
+  test("opens no listener and never resolves a role", () => {
+    const { hook } = setup("");
+    expect(subscribeToDealer).not.toHaveBeenCalled();
+    expect(hook.result.current.role).toBeNull();
   });
 });

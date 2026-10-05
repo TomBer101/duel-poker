@@ -56,7 +56,10 @@ export function useShuffle(ctx: ShuffleInput): ShuffleHandle {
   // within a mount. Latching keeps a STALE instance from re-deriving its role
   // when a rematch reset flips protocol/dealer and republishing its old-seed
   // (write-once) commitments over the new game's.
-  useEffect(() => subscribeToDealer(db, roomId, (d) => setDealer((cur) => cur ?? d)), [db, roomId]);
+  useEffect(() => {
+    if (!roomId) return; // solo: no room, no listener (everything else waits on `role`)
+    return subscribeToDealer(db, roomId, (d) => setDealer((cur) => cur ?? d));
+  }, [db, roomId]);
 
   // Set up my half of the shuffle. Refresh-safe: nothing already in the logs
   // is published again.

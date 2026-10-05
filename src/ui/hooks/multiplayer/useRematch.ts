@@ -17,7 +17,10 @@ export function useRematch(ctx: MultiplayerCtx): { rematchRequested: boolean } {
   const [votes, setVotes] = useState<Partial<Record<PlayerId, boolean>>>({});
   const resetFor = useRef<number | null>(null);
 
-  useEffect(() => subscribeToRematch(db, roomId, setVotes), [db, roomId]);
+  useEffect(() => {
+    if (!roomId) return; // solo: no room, no listener
+    return subscribeToRematch(db, roomId, setVotes);
+  }, [db, roomId]);
 
   const both = votes.p1 === true && votes.p2 === true;
   useEffect(() => {

@@ -4,13 +4,13 @@ import { describe, expect, test, vi } from "vitest";
 import { createInitialState, gameReducer } from "../../../engine/reducer";
 import { autoPlacePlacingPhase } from "../../../engine/testkit";
 import type { GameEvent } from "../../../engine/types";
-import { fetchReveals, publishEvent, publishReveal } from "../../../net/sync";
+import { fetchReveals, publishEvent, publishReveal, subscribeToEvents } from "../../../net/sync";
 import { createProtocolState } from "../../../crypto/protocolController";
 import { useGameEngine } from "../useGameEngine";
 import type { MultiplayerCtx } from "./context";
 import { before, deck, dealt, drawn, endTurn, fakeCtx } from "./testCtx";
 import { useTurnDraws } from "./useTurnDraws";
-import { applyHead, enqueueOnce, type Queued } from "./useOpponentEvents";
+import { applyHead, enqueueOnce, useOpponentEvents, type Queued } from "./useOpponentEvents";
 
 vi.mock("../../../net/sync", () => ({
   subscribeToEvents: vi.fn(),
@@ -301,5 +301,13 @@ describe("own hidden-timeout translation (TIMEOUT_HIDDEN about me, the dealer)",
     expect(exhausted.ctx.refs.lastSeq.current).toBe(1);
     expect(exhausted.ctx.dispatch).not.toHaveBeenCalled();
     expect(exhausted.ctx.recordViolation).toHaveBeenCalledWith(expect.stringMatching(/failed to commit own hidden-timeout card/));
+  });
+});
+
+describe("useOpponentEvents without a room (solo)", () => {
+  test("opens no events listener", () => {
+    vi.mocked(subscribeToEvents).mockClear();
+    renderHook(() => useOpponentEvents({ ...fakeCtx(dealt(), "p1", "dealer"), roomId: "" }));
+    expect(subscribeToEvents).not.toHaveBeenCalled();
   });
 });
