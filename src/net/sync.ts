@@ -90,6 +90,14 @@ export async function setupPresence(
   await set(presenceRef, true);
 }
 
+/**
+ * Fires `callback` with this client's connection state (Firebase
+ * `.info/connected`): on subscribe, then on every drop and reconnect.
+ */
+export function subscribeToConnection(db: Database, callback: (connected: boolean) => void): () => void {
+  return onValue(ref(db, ".info/connected"), (snapshot) => callback(snapshot.val() === true));
+}
+
 /** Fires `callback` with the room's full presence map whenever it changes. */
 export function subscribeToPresence(
   db: Database,

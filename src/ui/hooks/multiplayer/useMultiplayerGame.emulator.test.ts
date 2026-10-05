@@ -8,7 +8,7 @@ import { createRoom, joinRoom } from "../../../net/room";
 import { useMultiplayerGame } from "./useMultiplayerGame";
 import { get, goOffline, goOnline, ref, type Database } from "firebase/database";
 import type { PlayerId } from "../../../engine/types";
-import { publishEvent, publishReveal, setupPresence, type ProtocolReveal } from "../../../net/sync";
+import { publishEvent, publishReveal, setupPresence, subscribeToPresence, type ProtocolReveal } from "../../../net/sync";
 import databaseRules from "../../../../database.rules.json";
 
 // The DEAL event schedules 10 staggered `card-place` sfx via real setTimeouts
@@ -186,10 +186,11 @@ async function dealtBy(dealer: PlayerId): Promise<void> {
  * Really disconnects `seat`'s client the way a dropped connection does:
  * registers the production presence hook (setupPresence: onDisconnect ->
  * false), goes offline so the server runs that onDisconnect under the real
- * rules, waits until the other client sees presence false, then reconnects.
- * The reconnect does not re-announce presence (refresh/reconnect recovery is
- * Task 14), so presence stays false and the opponent may claim a FORFEIT,
- * while this client still receives the resulting events.
+ * rules, and waits until the other client sees presence false. The client
+ * STAYS offline: a mounted game hook re-announces presence on reconnect
+ * (usePresence), which would close the FORFEIT window. Tests reconnect it
+ * with `goOnline` once the opponent's claim has landed; it then receives the
+ * resulting events.
  */
 async function dropConnection(seatDb: Database, seat: PlayerId): Promise<void> {
   await setupPresence(seatDb, roomId, seat);
@@ -199,7 +200,6 @@ async function dropConnection(seatDb: Database, seat: PlayerId): Promise<void> {
     async () => expect((await get(ref(observer, `rooms/${roomId}/presence/${seat}`))).val()).toBe(false),
     { timeout: 5000 },
   );
-  goOnline(seatDb);
 }
 
 describe("real security rules are enforced in this namespace", () => {
@@ -892,6 +892,7 @@ describe("useMultiplayerGame - claimWin (FORFEIT)", () => {
 await act(async () => {
       await p1.result.current.claimWin();
     });
+    goOnline(db2);
 
     await waitFor(
       () => {
@@ -912,6 +913,7 @@ await act(async () => {
 await act(async () => {
       await p1.result.current.claimWin();
     });
+    goOnline(db2);
     await waitFor(() => expect(p2.result.current.state.phase).toBe("result"), { timeout: 8000 });
     await waitFor(() => expect(p1.result.current.state.phase).toBe("result"));
 
@@ -924,6 +926,38 @@ await act(async () => {
     }); // would forfeit p1 if not guarded
     expect(p1.result.current.state).toBe(before);
     expect(p2.result.current.state.forfeitedBy).toBe("p2");
+    expect(p1.result.current.hasViolation).toBe(false);
+    expect(p2.result.current.hasViolation).toBe(false);
+  }, 20000);
+});
+
+describe("useMultiplayerGame - presence", () => {
+  test("the game page announces presence on mount and again after a reconnect; the opponent's view clears", async () => {
+    await dealtBy("p1");
+    // The lobby's announcement is gone (as after a page reload into the game).
+    await adminSet(`rooms/${roomId}/presence/p2`, false);
+    // What the opponent's DisconnectOverlay is driven by (GameScreen).
+    const seenByP1: boolean[] = [];
+    const unsubscribe = subscribeToPresence(db, roomId, (presence) => seenByP1.push(presence.p2 === true));
+    const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
+    const p2 = renderHook(() => useMultiplayerGame({ db: db2, roomId, you: "p2", gameNumber: 1 }));
+    await waitFor(() => expect(seenByP1.at(-1)).toBe(true), { timeout: 5000 });
+    await waitFor(() => expect(p1.result.current.state.drawCount).toBeGreaterThanOrEqual(10), { timeout: 5000 });
+
+    // A real drop: the server runs p2's onDisconnect (presence false)...
+    goOffline(db2);
+    await waitFor(() => expect(seenByP1.at(-1)).toBe(false), { timeout: 5000 });
+    // ...and the reconnect re-arms it and announces p2 again.
+    goOnline(db2);
+    await waitFor(() => expect(seenByP1.at(-1)).toBe(true), { timeout: 5000 });
+    unsubscribe();
+
+    // The FORFEIT presence gate now protects the live, reconnected p2.
+    await act(async () => {
+      await p1.result.current.claimWin();
+    });
+    expect((await get(ref(db, `rooms/${roomId}/events`))).val()).toBeNull();
+    expect(p1.result.current.state.phase).not.toBe("result");
     expect(p1.result.current.hasViolation).toBe(false);
     expect(p2.result.current.hasViolation).toBe(false);
   }, 20000);
@@ -975,6 +1009,7 @@ describe("useMultiplayerGame - rematch (real rules, two clients)", () => {
 await act(async () => {
       await p1.handle!.claimWin();
     });
+    goOnline(db2);
     await waitFor(
       () => {
         expect(p1.handle?.state.phase).toBe("result");
@@ -1041,6 +1076,7 @@ await act(async () => {
 await act(async () => {
       await p1.result.current.claimWin();
     });
+    goOnline(db2);
     await waitFor(() => expect(p2.result.current.state.phase).toBe("result"), { timeout: 8000 });
     act(() => p1.result.current.playAgain());
     act(() => p2.result.current.playAgain());

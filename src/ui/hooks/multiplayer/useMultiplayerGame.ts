@@ -9,6 +9,7 @@ import { claimWin, placePending, playAgain, replace, timeout } from "./myMoves";
 import { useRematch } from "./useRematch";
 import { useOpeningDeal } from "./useOpeningDeal";
 import { useOpponentEvents } from "./useOpponentEvents";
+import { usePresence } from "./usePresence";
 import { useProtocol } from "./useProtocol";
 import { useRevealPhase } from "./useRevealPhase";
 import { useShuffle } from "./useShuffle";
@@ -77,6 +78,7 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
   useTurnDraws(ctx);
   useRevealPhase(ctx);
   const { rematchRequested } = useRematch(ctx);
+  usePresence(db, roomId, you);
 
   const isHumanTurn = state.turn === you && (state.phase === "placing" || state.phase === "replace");
   // Replace-phase legality arrives with the replace flow (a later task).

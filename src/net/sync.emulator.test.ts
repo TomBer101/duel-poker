@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { get, ref, type Database } from "firebase/database";
+import { get, goOffline, goOnline, ref, type Database } from "firebase/database";
 import { connectToEmulators, createFirebaseClient, signInAnonymous } from "./firebase";
 import {
   newEventKey,
@@ -7,6 +7,7 @@ import {
   setupPresence,
   subscribeToEvents,
   subscribeToPresence,
+  subscribeToConnection,
   publishCommitments,
   publishReveal,
   subscribeToCommitments,
@@ -114,6 +115,19 @@ describe("setupPresence / subscribeToPresence", () => {
       expect(updates.at(-1)).toEqual({ p1: true });
     });
 
+    unsubscribe();
+  });
+});
+
+describe("subscribeToConnection", () => {
+  test("reports connected, then the drop, then the reconnect", async () => {
+    const seen: boolean[] = [];
+    const unsubscribe = subscribeToConnection(db, (c) => seen.push(c));
+    await vi.waitFor(() => expect(seen.at(-1)).toBe(true));
+    goOffline(db);
+    await vi.waitFor(() => expect(seen.at(-1)).toBe(false));
+    goOnline(db);
+    await vi.waitFor(() => expect(seen.at(-1)).toBe(true));
     unsubscribe();
   });
 });
