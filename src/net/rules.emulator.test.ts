@@ -333,12 +333,17 @@ const cases: Case[] = [
   // --- events: total order (seq tied to meta/eventSeq in the same update) ---
   { name: "events: the first event has seq 1 and bumps the counter to 1", as: "alice", write: publishEvent(endTurn("p1"), "p2", 1), allow: true },
   { name: "events: the next event continues the counter (2 after 1)", as: "alice", seed: (r) => { r.meta.eventSeq = 1; }, write: publishEvent(endTurn("p1"), "p2", 2), allow: true },
-  { name: "events: a wrong (skipping) seq is denied", as: "alice", write: publishEvent(endTurn("p1"), "p2", 2), allow: false },
+  { name: "events: a wrong (skipping) seq is denied even with a valid +1 counter bump", as: "alice", write: publishEvent(endTurn("p1"), "p2", 2, 1), allow: false },
+  // Load-bearing for the seq == pre + 1 clause: the stored counter already equals seq.
+  { name: "events: a seq equal to the existing counter, with no bump, is denied", as: "alice", seed: (r) => { r.meta.eventSeq = 1; }, write: publishEvent(endTurn("p1"), "p2", 1, null), allow: false },
   { name: "events: a duplicate seq (equal to the counter) is denied", as: "alice", seed: (r) => { r.meta.eventSeq = 1; }, write: publishEvent(endTurn("p1"), "p2", 1, 2), allow: false },
   { name: "events: an event without the counter bump is denied", as: "alice", write: publishEvent(endTurn("p1"), "p2", 1, null), allow: false },
   { name: "events: a counter bump not matching the event seq is denied", as: "alice", seed: (r) => { r.meta.eventSeq = 1; }, write: publishEvent(endTurn("p1"), "p2", 2, 3), allow: false },
   { name: "events: an event without seq is denied", as: "alice", write: update({ "events/pushA": endTurn("p1"), "meta/eventSeq": 1, "meta/turn": "p2" }), allow: false },
   { name: "eventSeq: the counter only ever steps by exactly 1", as: "alice", seed: (r) => { r.meta.eventSeq = 1; }, write: set("meta/eventSeq", 3), allow: false },
+  { name: "meta: wiping meta (restarting the counter) is denied while eventSeq exists", as: "alice", seed: (r) => { r.meta.eventSeq = 4; }, write: set("meta", null), allow: false },
+  { name: "meta: re-creating meta without the counter is denied while eventSeq exists", as: "bob", seed: (r) => { r.meta.eventSeq = 4; }, write: set("meta", { turn: "p1" }), allow: false },
+  { name: "meta: an update that keeps eventSeq is allowed", as: "alice", seed: (r) => { r.meta.eventSeq = 4; }, write: update({ "meta/turn": "p2", "meta/turnStartedAt": TIMESTAMP }), allow: true },
   { name: "eventSeq: cannot be deleted outside the rematch reset", as: "alice", seed: (r) => { r.meta.eventSeq = 4; }, write: set("meta/eventSeq", null), allow: false },
   // Known gap (Task 16 lastEvent tie): a lone +1 bump is allowed, a seated cheater's DoS.
   { name: "eventSeq: a lone +1 bump is (still) allowed", as: "alice", seed: (r) => { r.meta.eventSeq = 1; }, write: set("meta/eventSeq", 2), allow: true },

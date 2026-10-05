@@ -13,8 +13,7 @@
           }
         },
         "meta": {
-          ".validate": "!data.child('eventSeq').exists() || newData.child('eventSeq').exists() || newData.parent().child('gameNumber').val() != root.child('rooms').child($roomId).child('gameNumber').val()",
-          ".write": "auth != null && ((!data.exists() && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid) || (data.exists() && (root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid || root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid)))",
+          ".write": "auth != null && (((!data.exists() && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid) || (data.exists() && (root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid || root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid)))) && (!data.child('eventSeq').exists() || newData.child('eventSeq').exists() || newData.parent().child('gameNumber').val() != root.child('rooms').child($roomId).child('gameNumber').val())",
           "passwordHash": {
             ".validate": "newData.isString()"
           },
