@@ -7,7 +7,8 @@ import type { MultiplayerCtx } from "./context";
 
 /** Assembles the 10 verified opening-deal draws into one DEAL event. */
 export function useOpeningDeal(ctx: MultiplayerCtx): void {
-  const { db, roomId, role, protocol, dispatch, hasPendingDispatch } = ctx;
+  const { db, roomId, role, protocol, dispatch, hasPendingDispatch, refs } = ctx;
+  const resumedRef = refs.resumed;
   const dealBuffer = useRef<Map<number, Card>>(new Map());
   const dealt = useRef(false);
 
@@ -28,6 +29,8 @@ export function useOpeningDeal(ctx: MultiplayerCtx): void {
       cards[slot.player][slot.hand] = dealBuffer.current.get(i)!;
     });
     dispatch({ type: "DEAL", cards });
-    void publishTurnStarted(db, roomId);
+    // Only a genuine game start stamps the first turn: a refreshed instance
+    // re-deriving the DEAL must not restart (extend) the current turn.
+    if (!resumedRef.current) void publishTurnStarted(db, roomId);
   });
 }

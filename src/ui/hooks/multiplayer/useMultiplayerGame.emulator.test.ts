@@ -1305,6 +1305,22 @@ describe("useMultiplayerGame - refresh (real rules, two clients, no stubs)", () 
     expect(all.filter((r) => r.kind === "placementCommit" && r.by === dealer)).toHaveLength(5 + hiddenSwaps);
   }
 
+  test("a refresh never restamps the turn clock; a fresh game start does stamp it", async () => {
+    const { clients, gameNumber } = await startGame("p1"); // game 1: createRoom stamps no turn
+    const stamp = async () => (await get(ref(db, `rooms/${roomId}/meta/turnStartedAt`))).val() as number | null;
+    await waitFor(async () => expect(await stamp()).not.toBeNull(), { timeout: 5000 }); // the DEAL stamped it
+    await drivePlacingTurns(clients, 2);
+    await waitFor(() => expect(clients.p1.result.current.state.pendingCard).not.toBeNull(), { timeout: 8000 });
+    await settle();
+    const before = await stamp();
+
+    // Both seats refresh on p1's turn: each fresh instance re-derives the DEAL.
+    clients.p1 = await refresh(clients.p1, "p1", gameNumber);
+    clients.p2 = await refresh(clients.p2, "p2", gameNumber);
+    await settle(1000);
+    expect(await stamp()).toBe(before);
+  }, 60000);
+
   test("(a) the selector refreshes mid-placing, after a dealer hidden placement: identical state, the game finishes", async () => {
     const { clients, gameNumber } = await startGame("p2"); // p2 deals, p1 selects
     // 32 turns: turn 31 is the dealer's first hidden placement (draw 41), so
