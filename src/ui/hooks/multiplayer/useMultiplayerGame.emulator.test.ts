@@ -31,11 +31,31 @@ vi.mock("../../sound/gameSounds", () => ({
 type PositionRevealControl = { roomId: string; drawIndex: number; mode: "block" | { delayMs: number } } | null;
 let positionRevealControl: PositionRevealControl = null;
 
+// Stands in for Task 14c's "do not republish what already exists" guards while
+// a late (simulated-refresh) instance is mounted: commitment republishes are
+// dropped (write-once: the real write is denied and the seed IIFE would leave
+// an unhandled rejection), and a player's SECOND placement reveal batch is
+// captured instead of published (the opponent records a duplicate batch as a
+// violation). Everything else the late instance republishes (position / card
+// reveals, turn start) is a harmless idempotent duplicate and goes out as is.
+type CatchUpControl = { roomId: string; published: Set<string>; republished: ProtocolReveal[] } | null;
+let catchUpControl: CatchUpControl = null;
+
 vi.mock("../../../net/sync", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../net/sync")>();
   return {
     ...actual,
+    publishCommitments: (...args: Parameters<typeof actual.publishCommitments>) =>
+      catchUpControl?.roomId === args[1] ? Promise.resolve() : actual.publishCommitments(...args),
     publishReveal: (db: Database, roomId: string, reveal: ProtocolReveal) => {
+      const u = catchUpControl;
+      if (reveal.kind === "placementReveal" && u?.roomId === roomId) {
+        if (u.published.has(reveal.by)) {
+          u.republished.push(reveal);
+          return Promise.resolve();
+        }
+        u.published.add(reveal.by);
+      }
       const c = positionRevealControl;
       if (c && reveal.kind === "position" && roomId === c.roomId && reveal.drawIndex === c.drawIndex) {
         if (c.mode === "block") return Promise.resolve();
@@ -190,18 +210,19 @@ describe("real security rules are enforced in this namespace", () => {
     await expect(
       publishReveal(db2, roomId, { kind: "placementCommit", by: "p2", handIndex: 0, commitment: "0".repeat(64) }),
     ).rejects.toThrow(/permission.denied/i);
-    await expect(publishEvent(db2, roomId, { type: "FORFEIT", by: "p2" })).rejects.toThrow(/permission.denied/i);
-    await expect(publishEvent(db2, roomId, { type: "FORFEIT", by: "p1" })).rejects.toThrow(/permission.denied/i);
+    await expect(publishEvent(db2, roomId, { type: "FORFEIT", by: "p2" }, { seq: 1 })).rejects.toThrow(/permission.denied/i);
+    await expect(publishEvent(db2, roomId, { type: "FORFEIT", by: "p1" }, { seq: 1 })).rejects.toThrow(/permission.denied/i);
     // ...while legal writes from the same client go through: once p1 has
     // really dropped, the same FORFEIT is accepted.
     await expect(publishRematchVote(db2, roomId, "p2")).resolves.toBeUndefined();
     await dropConnection(db, "p1");
-    await expect(publishEvent(db2, roomId, { type: "FORFEIT", by: "p1" })).resolves.toEqual(expect.any(String));
+    await expect(publishEvent(db2, roomId, { type: "FORFEIT", by: "p1" }, { seq: 1 })).resolves.toEqual(expect.any(String));
   });
 });
 
 afterEach(() => {
   positionRevealControl = null;
+  catchUpControl = null;
 });
 
 describe("useMultiplayerGame — shuffling and opening deal", () => {
@@ -351,6 +372,40 @@ describe("useMultiplayerGame - publish-then-apply", () => {
       { timeout: 5000 },
     );
     expect(p1.result.current.state.hands.p1.reduce((n, h) => n + h.cards.length, 0)).toBe(6);
+    expect(p1.result.current.hasViolation).toBe(false);
+    expect(p2.result.current.hasViolation).toBe(false);
+  }, 20000);
+});
+
+describe("useMultiplayerGame - seq-ordered log", () => {
+  test("an END_TURN racing the opponent's TIMEOUT report: exactly one takes the position, both converge", async () => {
+    await dealtBy("p1");
+    const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
+    const p2 = renderHook(() => useMultiplayerGame({ db: db2, roomId, you: "p2", gameNumber: 1 }));
+    await waitFor(
+      () => {
+        expect(p1.result.current.state.pendingCard).not.toBeNull();
+        expect(p2.result.current.state.pendingCard).not.toBeNull(); // p2 sees p1's card too
+      },
+      { timeout: 5000 },
+    );
+    await act(async () => {
+      await Promise.all([p1.result.current.placePending(p1.result.current.legalHands[0]), p2.result.current.timeout()]);
+    });
+    const events = Object.values((await get(ref(db, `rooms/${roomId}/events`))).val() as Record<string, { type: string; seq: number }>);
+    expect(events).toHaveLength(1);
+    expect(events[0].seq).toBe(1);
+    expect((await get(ref(db, `rooms/${roomId}/meta/eventSeq`))).val()).toBe(1);
+    await waitFor(
+      () => {
+        expect(p1.result.current.state.turn).toBe("p2");
+        expect(p2.result.current.state.turn).toBe("p2");
+        expect(p1.result.current.state.hands).toEqual(p2.result.current.state.hands);
+        expect(p1.result.current.state.strikes).toEqual(p2.result.current.state.strikes);
+      },
+      { timeout: 5000 },
+    );
+    expect(p1.result.current.state.strikes.p1).toBe(events[0].type === "TIMEOUT" ? 1 : 0);
     expect(p1.result.current.hasViolation).toBe(false);
     expect(p2.result.current.hasViolation).toBe(false);
   }, 20000);
@@ -1045,4 +1100,98 @@ await act(async () => {
     un1();
     un2();
   }, 30000);
+});
+
+describe("useMultiplayerGame - catch-up from the logs (simulated refresh)", () => {
+  // A late SECOND instance of `seat` (same seat, gameNumber and localStorage
+  // seed, fresh refs) mounted mid-game rebuilds the identical engine state
+  // from the commitments, reveals and events alone, then follows the live
+  // game through the replace phase to the result. A THIRD instance mounted
+  // right after the dealer's swap into the hand its hidden-timeout card went
+  // to must not republish that card's (older) commit: it would become the
+  // hand's latest and break the swap's reveal check.
+  test.each(["p1", "p2"] as const)("late %s instance (p1 deals) matches the live one mid-game and at the result", async (seat) => {
+    await dealtBy("p1"); // p1 dealer, p2 selector
+    const seatDb = { p1: db, p2: db2 };
+    const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
+    const p2 = renderHook(() => useMultiplayerGame({ db: db2, roomId, you: "p2", gameNumber: 1 }));
+    const clients = { p1, p2 };
+    await waitFor(() => expect(p1.result.current.state.drawCount).toBeGreaterThanOrEqual(10), { timeout: 5000 });
+    await drivePlacingTurns(clients, 30);
+
+    // Turn 30: the dealer's first hidden turn times out (TIMEOUT_HIDDEN by
+    // p2, translated by p1); turn 31: p2's turn times out (TIMEOUT by p1).
+    await waitFor(() => expect(p1.result.current.state.pendingCard).not.toBeNull(), { timeout: 8000 });
+    await waitFor(() => expect(p2.result.current.state.turn).toBe("p1"), { timeout: 8000 });
+    await act(async () => {
+      await p2.result.current.timeout();
+    });
+    await waitFor(
+      () => {
+        expect(p1.result.current.state.pendingCard).not.toBeNull();
+        expect(p1.result.current.state.turn).toBe("p2");
+      },
+      { timeout: 8000 },
+    );
+    await act(async () => {
+      await p1.result.current.timeout();
+    });
+    await waitFor(() => expect(p2.result.current.state.strikes).toEqual({ p1: 1, p2: 1 }), { timeout: 8000 });
+    await drivePlacingTurns(clients, 2);
+
+    // The simulated refresh: a fresh instance of the same seat (the live
+    // instances' commitments are out; batches come later, at the reveal).
+    catchUpControl = { roomId, published: new Set(), republished: [] };
+    const live = clients[seat];
+    const late = renderHook(() => useMultiplayerGame({ db: seatDb[seat], roomId, you: seat, gameNumber: 1 }));
+    await waitFor(() => expect(late.result.current.state).toEqual(live.result.current.state), { timeout: 15000 });
+    expect(late.result.current.state.drawCount).toBeGreaterThanOrEqual(43);
+
+    // It keeps following the live game: the rest of the placing phase...
+    await drivePlacingTurns(clients, 6);
+    await waitFor(() => expect(p2.result.current.state.phase).toBe("replace"), { timeout: 8000 });
+    // ...and the replace phase: the dealer swaps into hand 0 (where its timed-out
+    // hidden card went), the selector passes.
+    let late2: typeof late | null = null;
+    for (const [who, swap] of [["p1", 0], ["p2", null]] as const) {
+      const c = clients[who];
+      await waitFor(
+        () => {
+          expect(c.result.current.state.turn).toBe(who);
+          expect(c.result.current.state.pendingCard).not.toBeNull();
+        },
+        { timeout: 8000 },
+      );
+      await act(async () => {
+        await c.result.current.replace(swap);
+      });
+      if (who === "p1") {
+        late2 = renderHook(() => useMultiplayerGame({ db: seatDb[seat], roomId, you: seat, gameNumber: 1 }));
+        await waitFor(() => expect(late2!.result.current.state).toEqual(live.result.current.state), { timeout: 15000 });
+      }
+    }
+    await waitFor(
+      () => {
+        expect(p1.result.current.state.result).not.toBeNull();
+        expect(p2.result.current.state.result).not.toBeNull();
+        expect(late.result.current.state).toEqual(live.result.current.state);
+        expect(late2!.result.current.state).toEqual(live.result.current.state);
+      },
+      { timeout: 15000 },
+    );
+    expect(p1.result.current.state.result).toEqual(p2.result.current.state.result);
+    for (const c of [p1, p2, late, late2!]) expect(c.result.current.hasViolation).toBe(false);
+
+    // The late instance rebuilt its own reveal batch (for the dealer: every
+    // hidden slot's draw index and salt) identically, and nothing else of its
+    // own was republished as a second batch.
+    const reveals = Object.values((await get(ref(db, `rooms/${roomId}/protocol/reveals`))).val() as Record<string, ProtocolReveal>);
+    const liveBatch = reveals.filter((r) => r.kind === "placementReveal" && r.by === seat);
+    expect(liveBatch).toHaveLength(1);
+    // Catch-up published no placementCommit: the 5 hidden placements + the swap.
+    expect(reveals.filter((r) => r.kind === "placementCommit")).toHaveLength(6);
+    // (Firebase drops the selector's empty `cards` array on the wire.)
+    const normalized = (rs: ProtocolReveal[]) => rs.map((r) => ({ ...r, cards: (r as { cards?: unknown[] }).cards ?? [] }));
+    await waitFor(() => expect(normalized(catchUpControl!.republished)).toEqual(normalized([...liveBatch, ...liveBatch])), { timeout: 5000 });
+  }, 120000);
 });
