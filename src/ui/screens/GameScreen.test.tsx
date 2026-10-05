@@ -27,13 +27,13 @@ const claimWin = vi.hoisted(() => vi.fn());
 const gn = vi.hoisted(() => ({
   deliver: null as null | ((n: number) => void),
   mounts: 0,
-  calls: [] as { gameNumber: number }[],
+  calls: [] as { gameNumber: number; you: string }[],
 }));
 const mpState = vi.hoisted(() => ({ current: null as unknown }));
 const violation = vi.hoisted(() => ({ current: null as string | null }));
 vi.mock("../hooks/useSoloGame", () => ({ useSoloGame: () => handle }));
 vi.mock("../hooks/multiplayer/useMultiplayerGame", () => ({
-  useMultiplayerGame: (opts: { gameNumber: number }) => {
+  useMultiplayerGame: (opts: { gameNumber: number; you: string }) => {
     gn.calls.push(opts);
     useEffect(() => {
       gn.mounts++;
@@ -59,6 +59,9 @@ vi.mock("../../net/roomState", () => ({
     return () => {};
   },
 }));
+
+const findSeat = vi.hoisted(() => vi.fn());
+vi.mock("../../net/room", () => ({ findSeat }));
 
 // Stable identity: the real context value is stable, and the outer screen's
 // gameNumber subscription is keyed on `client.db`.
@@ -262,5 +265,49 @@ describe("GameScreen presence wiring (/room/:roomId, you = p2)", () => {
     expect(unsubscribe).not.toHaveBeenCalled();
     unmount();
     expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+});
+
+describe("GameScreen seat recovery (no seat stored in this tab)", () => {
+  const renderRoom = (roomId: string) =>
+    render(
+      <MemoryRouter initialEntries={[`/room/${roomId}`]}>
+        <Routes>
+          <Route path="/room/:roomId" element={<GameScreen />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+  beforeEach(() => {
+    mpState.current = handle.state;
+    gn.calls.length = 0;
+    findSeat.mockReset();
+  });
+
+  test("a stored seat is used as is, without a lookup", () => {
+    sessionStorage.setItem("duelPoker-you-STORED", "p2");
+    renderRoom("STORED");
+    expect(findSeat).not.toHaveBeenCalled();
+    expect(gn.calls.at(-1)?.you).toBe("p2");
+  });
+
+  test("the seat is recovered from the room by auth uid", async () => {
+    findSeat.mockResolvedValue("p2");
+    renderRoom("NEWTAB");
+    expect(await screen.findByTestId("game-screen")).toBeInTheDocument();
+    expect(findSeat).toHaveBeenCalledWith(fakeClient.client.db, "NEWTAB", "test-uid");
+    expect(gn.calls.every((c) => c.you === "p2")).toBe(true);
+  });
+
+  test.each([
+    ["holds no seat", () => findSeat.mockResolvedValue(null)],
+    ["lookup fails", () => findSeat.mockRejectedValue(new Error("offline"))],
+  ])("%s: an error screen, never a guessed p1", async (_, arrange) => {
+    arrange();
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    renderRoom("STRANGER");
+    expect(await screen.findByText("No seat in this room")).toBeInTheDocument();
+    expect(screen.queryByTestId("game-screen")).not.toBeInTheDocument();
+    expect(gn.calls).toHaveLength(0);
+    err.mockRestore();
   });
 });

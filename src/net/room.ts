@@ -1,4 +1,5 @@
 import { get, ref, serverTimestamp, set, update, type Database } from "firebase/database";
+import type { PlayerId } from "../engine/types";
 
 const ROOM_ID_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const ROOM_ID_LENGTH = 6;
@@ -86,4 +87,16 @@ export async function joinRoom(
   // seats/p2/uid back via root, which must already be committed.
   await set(ref(db, `rooms/${roomId}/seats/p2`), { nick, uid });
   await set(ref(db, `rooms/${roomId}/presence/p2`), true);
+}
+
+/**
+ * The seat `uid` occupies in `roomId`, or null when it holds neither (or the
+ * room does not exist). Recovers the seat for a page that lost its session
+ * (new tab, killed PWA) without guessing.
+ */
+export async function findSeat(db: Database, roomId: string, uid: string): Promise<PlayerId | null> {
+  const seats = (await get(ref(db, `rooms/${roomId}/seats`))).val() as Partial<Record<PlayerId, { uid?: string }>> | null;
+  if (seats?.p1?.uid === uid) return "p1";
+  if (seats?.p2?.uid === uid) return "p2";
+  return null;
 }

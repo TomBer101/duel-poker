@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from "vitest";
 import { get, ref, type Database } from "firebase/database";
 import { connectToEmulators, createFirebaseClient, signInAnonymous } from "./firebase";
-import { createRoom, joinRoom } from "./room";
+import { createRoom, findSeat, joinRoom } from "./room";
 
 const dummyConfig = {
   apiKey: "test-api-key",
@@ -74,5 +74,17 @@ describe("joinRoom", () => {
     await expect(joinRoom(db, "bob-uid", "NOROOM", "Bob", "hunter2")).rejects.toThrow(
       "does not exist",
     );
+  });
+});
+
+describe("findSeat", () => {
+  test("finds each seat by uid; a stranger or a missing room has none", async () => {
+    const roomId = await createRoom(db, uid, "Alice", "hunter2");
+    await joinRoom(db, "bob-uid", roomId, "Bob", "hunter2");
+
+    expect(await findSeat(db, roomId, uid)).toBe("p1");
+    expect(await findSeat(db, roomId, "bob-uid")).toBe("p2");
+    expect(await findSeat(db, roomId, "carol-uid")).toBeNull();
+    expect(await findSeat(db, "NOROOM", uid)).toBeNull();
   });
 });
