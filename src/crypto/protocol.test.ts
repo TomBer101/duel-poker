@@ -72,7 +72,7 @@ describe("full commit -> reveal -> verify round trip", () => {
 
   test("detects a tampered salt on a card reveal", async () => {
     const dealerState = await generateDealerCommitments(seed);
-    const otherState = await generateDealerCommitments(new Uint8Array([9, 9, 9]));
+    const otherState = await generateDealerCommitments(new Uint8Array(16).fill(9));
     const cardReveal = revealCard(0, dealerState);
     const tampered = { ...cardReveal, salt: otherState.salts[0] };
     await expect(verifyCard(tampered, dealerState.commitments[0])).resolves.toBe(false);
@@ -127,9 +127,15 @@ describe("deterministic salts", () => {
   });
 
   test("tag length prefix disambiguates tag/field boundaries", async () => {
-    const x = await deriveSalt(seed, "a", 1);
-    const y = await deriveSalt(seed, "ab", 1);
+    // Without the prefix both preimages are seed || "abcde" (0x62636465 is
+    // "bcde" as a u32be): equal length, different tag/field split.
+    const x = await deriveSalt(seed, "abcde");
+    const y = await deriveSalt(seed, "a", 0x62636465);
     expect(saltToHex(x)).not.toBe(saltToHex(y));
+  });
+
+  test.each([0, 15, 17])("a %i-byte seed is rejected", async (n) => {
+    await expect(deriveSalt(new Uint8Array(n), "deck", 0)).rejects.toThrow(/16 bytes/);
   });
 
   test("derivePlacementSalt is deterministic and differs by handIndex and drawIndex", async () => {

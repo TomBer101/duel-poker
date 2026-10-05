@@ -1,5 +1,6 @@
 const SALT_BYTES = 16;
-const SEED_BYTES = 16;
+/** Every seed is exactly this long; anything else is rejected (see loadSeed, deriveSalt). */
+export const SEED_BYTES = 16;
 
 function toHex(bytes: ArrayBuffer): string {
   return Array.from(new Uint8Array(bytes))
@@ -46,6 +47,7 @@ export async function deriveSalt(
   tag: string,
   ...fields: number[]
 ): Promise<Uint8Array> {
+  if (seed.length !== SEED_BYTES) throw new Error(`seed must be ${SEED_BYTES} bytes, got ${seed.length}`);
   const tagBytes = new TextEncoder().encode(tag);
   const payload = new Uint8Array(seed.length + 1 + tagBytes.length + fields.length * 4);
   payload.set(seed, 0);

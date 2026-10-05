@@ -146,6 +146,15 @@ describe("commitOwnFaceDownCard (own hidden-timeout translation)", () => {
     expect(publishReveal).not.toHaveBeenCalled();
     expect(ctx.refs.ownSlotDraw.current.get(0)).toBe(40);
   });
+
+  test("without my dealer state: a recorded violation and a rejected commit, nothing published", async () => {
+    const ctx = fakeCtx(drawn(before(40)), "p1", "dealer");
+    (ctx.dealerState as { current: unknown }).current = null;
+    await expect(commitOwnFaceDownCard(ctx, 0, card, 40)).rejects.toThrow(/without my dealer state/);
+    expect(ctx.recordViolation).toHaveBeenCalledWith(expect.stringMatching(/without my dealer state/));
+    expect(publishReveal).not.toHaveBeenCalled();
+    expect(ctx.refs.ownSlotDraw.current.has(0)).toBe(false);
+  });
 });
 
 test("claimWin publishes once while a claim is in flight", async () => {

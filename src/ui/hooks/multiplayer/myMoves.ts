@@ -62,7 +62,16 @@ function startTurnClock(ctx: MultiplayerCtx): Promise<void> {
 
 /** Dealer-only: the (seed-deterministic) placement commitment for a known face-down card. */
 async function placementCommitment(ctx: MultiplayerCtx, handIndex: number, card: Card, drawIndex: number): Promise<string> {
-  const salt = await derivePlacementSalt(ctx.dealerState.current!.seed, handIndex, drawIndex);
+  const dealer = ctx.dealerState.current;
+  if (!dealer) {
+    // Callers only get here as the dealer, after the deal: my shuffle state
+    // must exist. Without it no commit can be made (callers treat the throw
+    // as a failed commit).
+    const message = `placement commit for hand ${handIndex} without my dealer state`;
+    ctx.recordViolation(message);
+    throw new Error(message);
+  }
+  const salt = await derivePlacementSalt(dealer.seed, handIndex, drawIndex);
   return commitPlacement(card, handIndex, salt);
 }
 
