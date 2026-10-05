@@ -3,6 +3,7 @@ import { DndContext, DragOverlay } from "@dnd-kit/core";
 import { useParams } from "react-router-dom";
 import { useFirebaseClient } from "../../app/firebaseContext";
 import { MAX_STRIKES, TURN_TIMEOUT_MS } from "../../engine/constants";
+import { DEAL_SLOTS } from "../../crypto/drawSchedule";
 import { otherPlayer } from "../../engine/deck";
 import { subscribeToGameNumber } from "../../net/roomState";
 import { subscribeToPresence } from "../../net/sync";
@@ -159,7 +160,11 @@ function GameScreenBody({ roomId, gameNumber = 1 }: GameScreenBodyProps) {
         )}
 
         {roomId && state.phase !== "result" && (
-          <DisconnectOverlay opponentPresent={opponentPresent} onClaimWin={multiplayer.claimWin} />
+          <DisconnectOverlay
+            opponentPresent={opponentPresent}
+            canClaim={state.drawCount >= DEAL_SLOTS.length}
+            onClaimWin={multiplayer.claimWin}
+          />
         )}
 
         <DragOverlay dropAnimation={null}>

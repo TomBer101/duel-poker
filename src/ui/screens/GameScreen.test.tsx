@@ -158,7 +158,18 @@ describe("GameScreen presence wiring (/room/:roomId, you = p2)", () => {
 
   test("overlay is present-by-default (opponentPresent true) and wired to claimWin", () => {
     renderRoom();
-    expect(lastProps()).toEqual({ opponentPresent: true, onClaimWin: claimWin });
+    expect(lastProps()).toEqual({ opponentPresent: true, canClaim: false, onClaimWin: claimWin });
+  });
+
+  test.each([
+    [0, false],
+    [9, false],
+    [10, true],
+    [25, true],
+  ])("a win is claimable only once the deal has happened (drawCount %i -> %s)", (drawCount, canClaim) => {
+    mpState.current = { ...handle.state, drawCount };
+    renderRoom();
+    expect(lastProps()?.canClaim).toBe(canClaim);
   });
 
   test("opponent (p1) absent -> opponentPresent false; present again -> true", () => {
