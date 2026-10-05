@@ -13,6 +13,7 @@
           }
         },
         "meta": {
+          ".validate": "!data.child('eventSeq').exists() || newData.child('eventSeq').exists() || newData.parent().child('gameNumber').val() != root.child('rooms').child($roomId).child('gameNumber').val()",
           ".write": "auth != null && ((!data.exists() && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid) || (data.exists() && (root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid || root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid)))",
           "passwordHash": {
             ".validate": "newData.isString()"
@@ -25,6 +26,9 @@
           },
           "turnStartedAt": {
             ".validate": "newData.val() == now"
+          },
+          "eventSeq": {
+            ".validate": "newData.isNumber() && newData.val() == (data.exists() ? data.val() : 0) + 1"
           },
           "$other": {
             ".validate": false
@@ -39,7 +43,7 @@
           }
         },
         "protocol": {
-          ".write": "auth != null && (root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid || root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) && root.child('rooms').child($roomId).child('rematch/p1').val() == true && root.child('rooms').child($roomId).child('rematch/p2').val() == true && !newData.parent().child('rematch').exists() && !newData.parent().child('events').exists() && !newData.parent().child('protocol/commitments').exists() && !newData.parent().child('protocol/reveals').exists() && newData.parent().child('protocol/dealer').exists() && newData.parent().child('protocol/dealer').val() != root.child('rooms').child($roomId).child('protocol/dealer').val() && newData.parent().child('gameNumber').exists() && newData.parent().child('gameNumber').val() != root.child('rooms').child($roomId).child('gameNumber').val()",
+          ".write": "auth != null && (root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid || root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) && root.child('rooms').child($roomId).child('rematch/p1').val() == true && root.child('rooms').child($roomId).child('rematch/p2').val() == true && !newData.parent().child('rematch').exists() && !newData.parent().child('events').exists() && !newData.parent().child('protocol/commitments').exists() && !newData.parent().child('protocol/reveals').exists() && newData.parent().child('protocol/dealer').exists() && newData.parent().child('protocol/dealer').val() != root.child('rooms').child($roomId).child('protocol/dealer').val() && newData.parent().child('gameNumber').exists() && newData.parent().child('gameNumber').val() != root.child('rooms').child($roomId).child('gameNumber').val() && !newData.parent().child('meta/eventSeq').exists()",
           "dealer": {
             ".write": "auth != null && !data.exists() && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid && newData.val() == 'p1'",
             ".validate": "newData.val() == 'p1' || newData.val() == 'p2'"
@@ -125,15 +129,18 @@
           }
         },
         "events": {
-          ".write": "auth != null && (root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid || root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) && root.child('rooms').child($roomId).child('rematch/p1').val() == true && root.child('rooms').child($roomId).child('rematch/p2').val() == true && !newData.parent().child('rematch').exists() && !newData.parent().child('events').exists() && !newData.parent().child('protocol/commitments').exists() && !newData.parent().child('protocol/reveals').exists() && newData.parent().child('protocol/dealer').exists() && newData.parent().child('protocol/dealer').val() != root.child('rooms').child($roomId).child('protocol/dealer').val() && newData.parent().child('gameNumber').exists() && newData.parent().child('gameNumber').val() != root.child('rooms').child($roomId).child('gameNumber').val()",
+          ".write": "auth != null && (root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid || root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) && root.child('rooms').child($roomId).child('rematch/p1').val() == true && root.child('rooms').child($roomId).child('rematch/p2').val() == true && !newData.parent().child('rematch').exists() && !newData.parent().child('events').exists() && !newData.parent().child('protocol/commitments').exists() && !newData.parent().child('protocol/reveals').exists() && newData.parent().child('protocol/dealer').exists() && newData.parent().child('protocol/dealer').val() != root.child('rooms').child($roomId).child('protocol/dealer').val() && newData.parent().child('gameNumber').exists() && newData.parent().child('gameNumber').val() != root.child('rooms').child($roomId).child('gameNumber').val() && !newData.parent().child('meta/eventSeq').exists()",
           "$pushId": {
-            ".write": "auth != null && !data.exists() && (((newData.child('type').val() == 'END_TURN' || newData.child('type').val() == 'REPLACE') && newData.child('by').val() == root.child('rooms').child($roomId).child('meta/turn').val() && ((newData.child('by').val() == 'p1' && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid) || (newData.child('by').val() == 'p2' && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid))) || ((newData.child('type').val() == 'TIMEOUT' || newData.child('type').val() == 'TIMEOUT_HIDDEN') && newData.child('by').val() == root.child('rooms').child($roomId).child('meta/turn').val() && ((newData.child('by').val() == 'p1' && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) || (newData.child('by').val() == 'p2' && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid))) || (newData.child('type').val() == 'FORFEIT' && ((newData.child('by').val() == 'p1' && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) || (newData.child('by').val() == 'p2' && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid)) && root.child('rooms').child($roomId).child('presence').child(newData.child('by').val()).val() == false))",
-            ".validate": "newData.hasChildren(['type', 'by']) && (newData.child('type').val() != 'END_TURN' || newData.hasChildren(['handIndex', 'faceDown'])) && (newData.child('type').val() != 'TIMEOUT' || newData.hasChildren(['card']))",
+            ".write": "auth != null && !data.exists() && (((newData.child('type').val() == 'END_TURN' || newData.child('type').val() == 'REPLACE') && newData.child('by').val() == root.child('rooms').child($roomId).child('meta/turn').val() && ((newData.child('by').val() == 'p1' && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid) || (newData.child('by').val() == 'p2' && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid))) || ((newData.child('type').val() == 'TIMEOUT' || newData.child('type').val() == 'TIMEOUT_HIDDEN') && newData.child('by').val() == root.child('rooms').child($roomId).child('meta/turn').val() && ((newData.child('by').val() == 'p1' && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) || (newData.child('by').val() == 'p2' && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid))) || (newData.child('type').val() == 'FORFEIT' && ((newData.child('by').val() == 'p1' && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) || (newData.child('by').val() == 'p2' && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid)) && root.child('rooms').child($roomId).child('presence').child(newData.child('by').val()).val() == false)) && newData.child('seq').val() == (root.child('rooms').child($roomId).child('meta/eventSeq').exists() ? root.child('rooms').child($roomId).child('meta/eventSeq').val() : 0) + 1 && newData.parent().parent().child('meta/eventSeq').val() == newData.child('seq').val()",
+            ".validate": "newData.hasChildren(['type', 'by', 'seq']) && (newData.child('type').val() != 'END_TURN' || newData.hasChildren(['handIndex', 'faceDown'])) && (newData.child('type').val() != 'TIMEOUT' || newData.hasChildren(['card']))",
             "type": {
               ".validate": "newData.isString()"
             },
             "by": {
               ".validate": "newData.val() == 'p1' || newData.val() == 'p2'"
+            },
+            "seq": {
+              ".validate": "newData.isNumber() && newData.val() % 1 == 0 && newData.val() >= 1"
             },
             "handIndex": {
               ".validate": "(newData.parent().child('type').val() == 'END_TURN' || newData.parent().child('type').val() == 'REPLACE') && newData.isNumber() && newData.val() % 1 == 0 && newData.val() >= 0 && newData.val() <= 4"
@@ -160,7 +167,7 @@
           ".read": "auth != null"
         },
         "rematch": {
-          ".write": "auth != null && (root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid || root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) && root.child('rooms').child($roomId).child('rematch/p1').val() == true && root.child('rooms').child($roomId).child('rematch/p2').val() == true && !newData.parent().child('rematch').exists() && !newData.parent().child('events').exists() && !newData.parent().child('protocol/commitments').exists() && !newData.parent().child('protocol/reveals').exists() && newData.parent().child('protocol/dealer').exists() && newData.parent().child('protocol/dealer').val() != root.child('rooms').child($roomId).child('protocol/dealer').val() && newData.parent().child('gameNumber').exists() && newData.parent().child('gameNumber').val() != root.child('rooms').child($roomId).child('gameNumber').val()",
+          ".write": "auth != null && (root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid || root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) && root.child('rooms').child($roomId).child('rematch/p1').val() == true && root.child('rooms').child($roomId).child('rematch/p2').val() == true && !newData.parent().child('rematch').exists() && !newData.parent().child('events').exists() && !newData.parent().child('protocol/commitments').exists() && !newData.parent().child('protocol/reveals').exists() && newData.parent().child('protocol/dealer').exists() && newData.parent().child('protocol/dealer').val() != root.child('rooms').child($roomId).child('protocol/dealer').val() && newData.parent().child('gameNumber').exists() && newData.parent().child('gameNumber').val() != root.child('rooms').child($roomId).child('gameNumber').val() && !newData.parent().child('meta/eventSeq').exists()",
           "p1": {
             ".write": "auth != null && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid && newData.val() == true"
           },
@@ -172,7 +179,7 @@
           }
         },
         "gameNumber": {
-          ".write": "auth != null && (root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid || root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) && root.child('rooms').child($roomId).child('rematch/p1').val() == true && root.child('rooms').child($roomId).child('rematch/p2').val() == true && !newData.parent().child('rematch').exists() && !newData.parent().child('events').exists() && !newData.parent().child('protocol/commitments').exists() && !newData.parent().child('protocol/reveals').exists() && newData.parent().child('protocol/dealer').exists() && newData.parent().child('protocol/dealer').val() != root.child('rooms').child($roomId).child('protocol/dealer').val() && newData.parent().child('gameNumber').exists() && newData.parent().child('gameNumber').val() != root.child('rooms').child($roomId).child('gameNumber').val()",
+          ".write": "auth != null && (root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid || root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid) && root.child('rooms').child($roomId).child('rematch/p1').val() == true && root.child('rooms').child($roomId).child('rematch/p2').val() == true && !newData.parent().child('rematch').exists() && !newData.parent().child('events').exists() && !newData.parent().child('protocol/commitments').exists() && !newData.parent().child('protocol/reveals').exists() && newData.parent().child('protocol/dealer').exists() && newData.parent().child('protocol/dealer').val() != root.child('rooms').child($roomId).child('protocol/dealer').val() && newData.parent().child('gameNumber').exists() && newData.parent().child('gameNumber').val() != root.child('rooms').child($roomId).child('gameNumber').val() && !newData.parent().child('meta/eventSeq').exists()",
           ".validate": "newData.isNumber() && ((data.exists() && newData.val() == data.val() + 1) || (!data.exists() && newData.val() == 2))"
         },
         "scoredGame": {

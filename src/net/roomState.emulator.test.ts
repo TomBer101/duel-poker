@@ -1,5 +1,5 @@
 import { beforeEach, expect, test, vi } from "vitest";
-import { get, ref, type Database } from "firebase/database";
+import { get, ref, set, type Database } from "firebase/database";
 import { connectToEmulators, createFirebaseClient, signInAnonymous } from "./firebase";
 import {
   incrementScore,
@@ -80,8 +80,10 @@ test("incrementScore / subscribeToScore accumulates per player", async () => {
 test("resetForRematch clears events/protocol/rematch, sets the next dealer, and restarts the turn at p1", async () => {
   await publishRematchVote(db, roomId, "p1");
   await publishRematchVote(db, roomId, "p2");
+  await set(ref(db, `rooms/${roomId}/meta/eventSeq`), 5);
 
   await resetForRematch(db, roomId, "p2", 2);
+  expect((await get(ref(db, `rooms/${roomId}/meta/eventSeq`))).val()).toBeNull(); // event order restarts
 
   const rematch = await get(ref(db, `rooms/${roomId}/rematch`));
   expect(rematch.val()).toBeNull();

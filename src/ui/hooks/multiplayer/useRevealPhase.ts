@@ -13,7 +13,7 @@ const BATCH_RETRY_DELAY_MS = 500;
 
 /** The reveal phase: publish my batch, verify the opponent's, dispatch REVEAL_FACE_DOWN. */
 export function useRevealPhase(ctx: MultiplayerCtx): void {
-  const { db, roomId, you, role, state, dispatch, protocol, dealerState, bumpTick, updateProtocol, recordViolation, warnOnce, refs } =
+  const { db, roomId, you, role, state, dispatch, hasPendingDispatch, protocol, dealerState, bumpTick, updateProtocol, recordViolation, warnOnce, refs } =
     ctx;
   const { ownSlotDraw } = refs;
   const batchPublished = useRef(false);
@@ -27,7 +27,7 @@ export function useRevealPhase(ctx: MultiplayerCtx): void {
   // the reveal to the dealer's own deck commitments (not just its placement
   // commitment, which a cheating dealer could have fabricated for any card).
   useEffect(() => {
-    if (!role || state.phase !== "reveal" || batchPublished.current) return;
+    if (!role || hasPendingDispatch() || state.phase !== "reveal" || batchPublished.current) return;
     batchPublished.current = true;
     const entries: { handIndex: number; card: Card; drawIndex: number; position: number }[] = [];
     if (role === "dealer") {
@@ -77,7 +77,7 @@ export function useRevealPhase(ctx: MultiplayerCtx): void {
   // Reveal phase, step 1b: once the opponent's raw batch has arrived, verify
   // it (deck-bound; see step 1) exactly once.
   useEffect(() => {
-    if (!role || state.phase !== "reveal" || verifyQueued.current) return;
+    if (!role || hasPendingDispatch() || state.phase !== "reveal" || verifyQueued.current) return;
     const opponent = otherPlayer(you);
     const raw = protocol.current.receivedBatches[opponent];
     if (!raw) return;
@@ -90,7 +90,7 @@ export function useRevealPhase(ctx: MultiplayerCtx): void {
   // Reveal phase, step 2: once the opponent's batch verified, fill every
   // still-unknown face-down slot with ONE REVEAL_FACE_DOWN.
   useEffect(() => {
-    if (!role || state.phase !== "reveal" || revealDispatched.current) return;
+    if (!role || hasPendingDispatch() || state.phase !== "reveal" || revealDispatched.current) return;
     if (hasViolation(protocol.current)) return;
     const theirs = protocol.current.revealBatches[otherPlayer(you)];
     if (!theirs) return;

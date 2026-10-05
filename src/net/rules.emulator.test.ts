@@ -161,12 +161,19 @@ const set = (path: string, value: unknown) => (db: Db) => db.ref(at(path)).set(v
 const push = (path: string, value: unknown) => (db: Db) => db.ref(at(path)).push().set(value);
 /** Multi-path update rooted at the room, like publishEvent / resetForRematch. */
 const update = (values: Record<string, unknown>) => (db: Db) => db.ref(at("")).update(values);
-/** The exact shape publishEvent writes: the event plus meta/turn, in one update. */
-const publishEvent = (event: Record<string, unknown>, nextTurn?: string) => (db: Db) =>
-  db.ref().update({
-    [at("events/pushA")]: event,
-    ...(nextTurn ? { [at("meta/turn")]: nextTurn } : {}),
-  });
+/**
+ * The exact shape publishEvent writes: the event (with its `seq`) plus the
+ * matching meta/eventSeq bump and meta/turn, in one update. `bump` overrides
+ * the counter value written (null omits the bump).
+ */
+const publishEvent =
+  (event: Record<string, unknown>, nextTurn?: string, seq = 1, bump: number | null = seq) =>
+  (db: Db) =>
+    db.ref().update({
+      [at("events/pushA")]: { ...event, seq },
+      ...(bump === null ? {} : { [at("meta/eventSeq")]: bump }),
+      ...(nextTurn ? { [at("meta/turn")]: nextTurn } : {}),
+    });
 /** The exact shape resetForRematch writes (with optional tweaks / omitted paths). */
 const rematchReset = (dealer: string, overrides: Record<string, unknown> = {}, omit: string[] = []) => {
   const values: Record<string, unknown> = {
@@ -176,6 +183,7 @@ const rematchReset = (dealer: string, overrides: Record<string, unknown> = {}, o
     gameNumber: 2,
     "meta/turn": "p1",
     "meta/turnStartedAt": TIMESTAMP,
+    "meta/eventSeq": null,
     ...overrides,
   };
   for (const key of omit) delete values[key];
@@ -199,7 +207,8 @@ const turn = (who: string) => (room: Room) => {
   room.meta.turn = who;
 };
 const withGameState = (room: Room) => {
-  room.events = { e0: { type: "END_TURN", by: "p1", handIndex: 0, faceDown: false } };
+  room.events = { e0: { type: "END_TURN", by: "p1", handIndex: 0, faceDown: false, seq: 1 } };
+  room.meta.eventSeq = 1;
   room.protocol = {
     dealer: "p1",
     commitments: { dealer: commitments(52), selector: commitments(52) },
@@ -301,7 +310,7 @@ const cases: Case[] = [
   { name: "reveals: unauthenticated client cannot write", as: null, write: push("protocol/reveals", position("p2")), allow: false },
 
   // --- events/$pushId ---
-  { name: "events: END_TURN by the player on turn", as: "alice", write: push("events", endTurn("p1")), allow: true },
+  { name: "events: END_TURN by the player on turn", as: "alice", write: publishEvent(endTurn("p1")), allow: true },
   { name: "events: END_TURN in publishEvent's multi-path shape (event + meta/turn)", as: "alice", write: publishEvent(endTurn("p1"), "p2"), allow: true },
   { name: "events: out-of-turn END_TURN", as: "bob", write: publishEvent(endTurn("p2"), "p1"), allow: false },
   { name: "events: END_TURN impersonating the player on turn", as: "bob", write: publishEvent(endTurn("p1"), "p2"), allow: false },
@@ -312,14 +321,27 @@ const cases: Case[] = [
   { name: "events: TIMEOUT naming a player who is not on turn", as: "alice", write: publishEvent({ type: "TIMEOUT", by: "p2", card: { suit: "Hearts", rank: 2 } }, "p1"), allow: false },
   { name: "events: TIMEOUT_HIDDEN reported by the other seat", as: "bob", write: publishEvent({ type: "TIMEOUT_HIDDEN", by: "p1" }, "p2"), allow: true },
   { name: "events: TIMEOUT_HIDDEN written by a non-reporter (the timed-out seat)", as: "alice", write: publishEvent({ type: "TIMEOUT_HIDDEN", by: "p1" }, "p2"), allow: false },
-  { name: "events: TIMEOUT_HIDDEN by an unseated user", as: "mallory", write: push("events", { type: "TIMEOUT_HIDDEN", by: "p1" }), allow: false },
+  { name: "events: TIMEOUT_HIDDEN by an unseated user", as: "mallory", write: publishEvent({ type: "TIMEOUT_HIDDEN", by: "p1" }), allow: false },
   { name: "events: FORFEIT naming the disconnected opponent", as: "alice", seed: offline("p2"), write: publishEvent({ type: "FORFEIT", by: "p2" }), allow: true },
   { name: "events: FORFEIT is allowed off-turn too", as: "bob", seed: offline("p1"), write: publishEvent({ type: "FORFEIT", by: "p1" }), allow: true },
   { name: "events: FORFEIT against a present opponent", as: "alice", write: publishEvent({ type: "FORFEIT", by: "p2" }), allow: false },
   { name: "events: FORFEIT against an opponent with no presence node", as: "alice", seed: (r) => { delete (r.presence as Record<string, boolean>).p2; }, write: publishEvent({ type: "FORFEIT", by: "p2" }), allow: false },
   { name: "events: self-reported FORFEIT", as: "alice", seed: offline("p1"), write: publishEvent({ type: "FORFEIT", by: "p1" }), allow: false },
-  { name: "events: FORFEIT by an unseated user", as: "mallory", seed: offline("p1"), write: push("events", { type: "FORFEIT", by: "p1" }), allow: false },
+  { name: "events: FORFEIT by an unseated user", as: "mallory", seed: offline("p1"), write: publishEvent({ type: "FORFEIT", by: "p1" }), allow: false },
   { name: "events: FORFEIT carries only type and by", as: "alice", seed: offline("p2"), write: publishEvent({ type: "FORFEIT", by: "p2", winner: "p1" }), allow: false },
+
+  // --- events: total order (seq tied to meta/eventSeq in the same update) ---
+  { name: "events: the first event has seq 1 and bumps the counter to 1", as: "alice", write: publishEvent(endTurn("p1"), "p2", 1), allow: true },
+  { name: "events: the next event continues the counter (2 after 1)", as: "alice", seed: (r) => { r.meta.eventSeq = 1; }, write: publishEvent(endTurn("p1"), "p2", 2), allow: true },
+  { name: "events: a wrong (skipping) seq is denied", as: "alice", write: publishEvent(endTurn("p1"), "p2", 2), allow: false },
+  { name: "events: a duplicate seq (equal to the counter) is denied", as: "alice", seed: (r) => { r.meta.eventSeq = 1; }, write: publishEvent(endTurn("p1"), "p2", 1, 2), allow: false },
+  { name: "events: an event without the counter bump is denied", as: "alice", write: publishEvent(endTurn("p1"), "p2", 1, null), allow: false },
+  { name: "events: a counter bump not matching the event seq is denied", as: "alice", seed: (r) => { r.meta.eventSeq = 1; }, write: publishEvent(endTurn("p1"), "p2", 2, 3), allow: false },
+  { name: "events: an event without seq is denied", as: "alice", write: update({ "events/pushA": endTurn("p1"), "meta/eventSeq": 1, "meta/turn": "p2" }), allow: false },
+  { name: "eventSeq: the counter only ever steps by exactly 1", as: "alice", seed: (r) => { r.meta.eventSeq = 1; }, write: set("meta/eventSeq", 3), allow: false },
+  { name: "eventSeq: cannot be deleted outside the rematch reset", as: "alice", seed: (r) => { r.meta.eventSeq = 4; }, write: set("meta/eventSeq", null), allow: false },
+  // Known gap (Task 16 lastEvent tie): a lone +1 bump is allowed, a seated cheater's DoS.
+  { name: "eventSeq: a lone +1 bump is (still) allowed", as: "alice", seed: (r) => { r.meta.eventSeq = 1; }, write: set("meta/eventSeq", 2), allow: true },
 
   // --- events: shapes ---
   { name: "events: REPLACE pass (handIndex dropped as null)", as: "alice", write: publishEvent({ type: "REPLACE", by: "p1" }, "p2"), allow: true },
@@ -334,14 +356,14 @@ const cases: Case[] = [
   { name: "events: TIMEOUT with an extra card key", as: "bob", write: publishEvent(timeoutEv({ suit: "Hearts", rank: 2, faceUp: true }), "p2"), allow: false },
   { name: "events: TIMEOUT without a card", as: "bob", write: publishEvent({ type: "TIMEOUT", by: "p1" }, "p2"), allow: false },
   { name: "events: TIMEOUT_HIDDEN carrying a card", as: "bob", write: publishEvent({ type: "TIMEOUT_HIDDEN", by: "p1", card: { suit: "Hearts", rank: 2 } }, "p2"), allow: false },
-  { name: "events: removed type DEAL", as: "alice", write: push("events", { type: "DEAL", by: "p1" }), allow: false },
-  { name: "events: removed type DRAW", as: "alice", write: push("events", { type: "DRAW", by: "p1", card: { suit: "Hearts", rank: 2 } }), allow: false },
-  { name: "events: removed type REPLACE_DRAW", as: "alice", write: push("events", { type: "REPLACE_DRAW", by: "p1", card: { suit: "Hearts", rank: 2 } }), allow: false },
-  { name: "events: removed type ADVANCE_REVEAL", as: "alice", write: push("events", { type: "ADVANCE_REVEAL" }), allow: false },
-  { name: "events: removed type REMATCH", as: "alice", write: push("events", { type: "REMATCH", dealer: "p2" }), allow: false },
-  { name: "events: write-once (no overwriting an existing event)", as: "alice", seed: withGameState, write: set("events/e0", endTurn("p1")), allow: false },
-  { name: "events: unseated user cannot publish a turn event", as: "mallory", write: push("events", endTurn("p1")), allow: false },
-  { name: "events: unauthenticated client cannot publish", as: null, write: push("events", endTurn("p1")), allow: false },
+  { name: "events: removed type DEAL", as: "alice", write: publishEvent({ type: "DEAL", by: "p1" }), allow: false },
+  { name: "events: removed type DRAW", as: "alice", write: publishEvent({ type: "DRAW", by: "p1", card: { suit: "Hearts", rank: 2 } }), allow: false },
+  { name: "events: removed type REPLACE_DRAW", as: "alice", write: publishEvent({ type: "REPLACE_DRAW", by: "p1", card: { suit: "Hearts", rank: 2 } }), allow: false },
+  { name: "events: removed type ADVANCE_REVEAL", as: "alice", write: publishEvent({ type: "ADVANCE_REVEAL" }), allow: false },
+  { name: "events: removed type REMATCH", as: "alice", write: publishEvent({ type: "REMATCH", dealer: "p2" }), allow: false },
+  { name: "events: write-once (no overwriting an existing event)", as: "alice", seed: withGameState, write: set("events/e0", { ...endTurn("p1"), seq: 1 }), allow: false },
+  { name: "events: unseated user cannot publish a turn event", as: "mallory", write: publishEvent(endTurn("p1")), allow: false },
+  { name: "events: unauthenticated client cannot publish", as: null, write: publishEvent(endTurn("p1")), allow: false },
 
   // --- meta/turnStartedAt ---
   { name: "turnStartedAt: a seated player stamps server time", as: "bob", write: set("meta/turnStartedAt", TIMESTAMP), allow: true },
@@ -392,6 +414,9 @@ const cases: Case[] = [
   { name: "reset: leaving the rematch votes in place", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: rematchReset("p2", {}, ["rematch"]), allow: false },
   { name: "reset: keeping the events log", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: rematchReset("p2", {}, ["events"]), allow: false },
   { name: "reset: without bumping gameNumber", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: rematchReset("p2", {}, ["gameNumber"]), allow: false },
+  { name: "reset: the full reset restarts the event counter (absent)", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); r.meta.eventSeq = 7; }, write: rematchReset("p2"), allow: true },
+  { name: "reset: keeping the event counter", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: rematchReset("p2", {}, ["meta/eventSeq"]), allow: false },
+  { name: "reset: partial reset, deleting the event counter alone", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: set("meta/eventSeq", null), allow: false },
   { name: "reset: skipping a gameNumber", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: rematchReset("p2", { gameNumber: 3 }), allow: false },
   { name: "reset: a second reset once the votes are cleared", as: "alice", seed: (r) => { r.gameNumber = 2; r.protocol = { dealer: "p2" }; }, write: rematchReset("p1", { gameNumber: 3 }), allow: false },
   { name: "reset: before any vote", as: "alice", seed: withGameState, write: rematchReset("p2"), allow: false },

@@ -51,6 +51,9 @@ export type SharedRefs = {
   // Push keys of events already applied (or being published by me): the
   // intake applies every other event in the log exactly once.
   seenKeys: RefObject<Set<string>>;
+  // `seq` of the last event applied (or consumed) locally, 0 before any: the
+  // intake applies `lastSeq + 1` next, and my own moves publish at it.
+  lastSeq: RefObject<number>;
 };
 
 /** Everything a sub-hook needs. Rebuilt by the root every render (latest `state`). */
@@ -62,6 +65,8 @@ export type MultiplayerCtx = ProtocolHandle &
     gameNumber: number;
     state: GameState;
     dispatch: (event: GameEvent) => void;
+    /** See `GameEngine.hasPendingDispatch`: effects deciding from `state` skip while true. */
+    hasPendingDispatch: () => boolean;
     refs: SharedRefs;
   };
 

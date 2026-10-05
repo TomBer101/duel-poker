@@ -111,5 +111,7 @@ export async function resetForRematch(
     gameNumber: nextGameNumber,
     "meta/turn": "p1",
     "meta/turnStartedAt": serverTimestamp(),
+    // The event order restarts with the new (empty) log; the rules require it.
+    "meta/eventSeq": null,
   });
 }

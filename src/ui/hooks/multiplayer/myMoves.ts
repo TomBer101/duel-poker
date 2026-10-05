@@ -1,11 +1,11 @@
 import { CARDS_PER_HAND } from "../../../engine/constants";
 import { otherPlayer } from "../../../engine/deck";
-import { isFaceDownPlacement } from "../../../engine/placement";
+import { getAutoPlaceIndex, isFaceDownPlacement } from "../../../engine/placement";
 import type { Card, GameEvent, PlayerId } from "../../../engine/types";
 import { derivePlacementSalt } from "../../../crypto/protocol";
-import { commitPlacement } from "../../../crypto/protocolController";
+import { commitPlacement, recordHiddenDraw } from "../../../crypto/protocolController";
 import { isFaceDownDraw, validReplaceHand } from "../../../crypto/drawSchedule";
-import { newEventKey, publishEvent, publishReveal } from "../../../net/sync";
+import { fetchReveals, newEventKey, publishEvent, publishReveal } from "../../../net/sync";
 import { publishRematchVote, publishTurnStarted } from "../../../net/roomState";
 import type { MultiplayerCtx } from "./context";
 
@@ -18,22 +18,30 @@ const errText = (err: unknown) => (err instanceof Error ? err.message : String(e
 
 /**
  * Publish-then-apply: the event log is the source of truth, so my move is
- * applied locally only once the server accepted it. The key is registered as
- * seen BEFORE the write (Firebase raises optimistic local events, so the echo
- * can arrive before the ack) and the intake skips it. A rejected write leaves
- * local state untouched and is not a violation (it can be a legitimate race,
- * e.g. the opponent's TIMEOUT took the turn first). Returns true when applied.
+ * applied locally only once the server accepted it. It is published at
+ * `seq = lastSeq + 1` (the next position after everything applied locally):
+ * the rules accept exactly one event per position, so a move made on a state
+ * that is behind the log (e.g. my END_TURN racing the opponent's TIMEOUT
+ * report) is denied rather than applied out of order. The key is registered
+ * as seen BEFORE the write (Firebase raises optimistic local events, so the
+ * echo can arrive before the ack) and the intake skips it. A rejected write
+ * leaves local state untouched and is abandoned, not a violation (it is a
+ * legitimate race); the caller clears its in-flight guard so the user / timer
+ * can act again on the caught-up state. Returns true when applied.
  */
 async function publishThenApply(ctx: MultiplayerCtx, event: GameEvent, nextTurn?: PlayerId): Promise<boolean> {
   const { db, roomId, dispatch, recordViolation, refs } = ctx;
   const key = newEventKey(db, roomId);
+  const seq = refs.lastSeq.current + 1;
   refs.seenKeys.current.add(key);
   try {
-    await publishEvent(db, roomId, event, nextTurn, key);
+    await publishEvent(db, roomId, event, { seq, nextTurn, key });
   } catch (err) {
-    console.warn(`[useMultiplayerGame] ${event.type} was not accepted; local state unchanged`, err);
+    console.warn(`[useMultiplayerGame] ${event.type} (seq ${seq}) was not accepted; local state unchanged`, err);
     return false;
   }
+  // Position `seq` is mine: the intake (which skips my key) moves past it.
+  refs.lastSeq.current = seq;
   try {
     dispatch(event);
   } catch (err) {
@@ -51,21 +59,29 @@ function startTurnClock(ctx: MultiplayerCtx): Promise<void> {
   });
 }
 
+/** Dealer-only: the (seed-deterministic) placement commitment for a known face-down card. */
+async function placementCommitment(ctx: MultiplayerCtx, handIndex: number, card: Card, drawIndex: number): Promise<string> {
+  const salt = await derivePlacementSalt(ctx.dealerState.current!.seed, handIndex, drawIndex);
+  return commitPlacement(card, handIndex, salt);
+}
+
 /** Dealer-only: hashes and publishes a `placementCommit` for a known face-down card. */
 async function publishPlacementCommit(ctx: MultiplayerCtx, handIndex: number, card: Card, drawIndex: number): Promise<void> {
-  const { db, roomId, you, dealerState } = ctx;
-  const salt = await derivePlacementSalt(dealerState.current!.seed, handIndex, drawIndex);
-  const commitment = await commitPlacement(card, handIndex, salt);
+  const { db, roomId, you } = ctx;
+  const commitment = await placementCommitment(ctx, handIndex, card, drawIndex);
   await publishReveal(db, roomId, { kind: "placementCommit", by: you, handIndex, commitment });
 }
 
 /**
- * Dealer-only: publishes the `placementCommit` for a known face-down card at
- * `handIndex` and records its originating draw index so the reveal-phase batch
- * (useRevealPhase) can later name and bind it back to the deck commitment (its
- * salt is re-derived there). Used by the dealer-side translation of an
- * opponent's TIMEOUT_HIDDEN report (my own hidden turn, timed out), whose
- * event is already in the log.
+ * Dealer-only: commits a known face-down card at `handIndex` and records its
+ * originating draw index so the reveal-phase batch (useRevealPhase) can later
+ * name and bind it back to the deck commitment (its salt is re-derived
+ * there). Used by the dealer-side translation of an opponent's TIMEOUT_HIDDEN
+ * report (my own hidden turn, timed out), whose event is already in the log.
+ * The commitment is deterministic, so on catch-up (a fresh instance replaying
+ * the log) an identical one is usually already in the reveal log: it is then
+ * NOT republished. A republished copy would become the hand's "latest" commit
+ * and break the reveal check of a later swap into the same hand.
  */
 export async function commitOwnFaceDownCard(
   ctx: MultiplayerCtx,
@@ -73,7 +89,12 @@ export async function commitOwnFaceDownCard(
   card: Card,
   drawIndex: number,
 ): Promise<void> {
-  await publishPlacementCommit(ctx, handIndex, card, drawIndex);
+  const { db, roomId, you } = ctx;
+  const commitment = await placementCommitment(ctx, handIndex, card, drawIndex);
+  const published = (await fetchReveals(db, roomId)).some(
+    (r) => r.kind === "placementCommit" && r.by === you && r.handIndex === handIndex && r.commitment === commitment,
+  );
+  if (!published) await publishReveal(db, roomId, { kind: "placementCommit", by: you, handIndex, commitment });
   ctx.refs.ownSlotDraw.current.set(handIndex, drawIndex);
 }
 
@@ -142,6 +163,12 @@ export async function timeout(ctx: MultiplayerCtx): Promise<void> {
   if (!(await publishThenApply(ctx, event, you))) {
     timedOutForDraw.current = null;
     return;
+  }
+  if (hidden) {
+    // The dealer's card went face-down unseen: record its hand and draw like a
+    // PLACE_HIDDEN, so its reveal-phase batch entry can be checked.
+    const handIndex = getAutoPlaceIndex(state.hands[opponent]);
+    ctx.updateProtocol("hidden timeout draw", (cur) => recordHiddenDraw(cur, handIndex, turnDrawIndex));
   }
   await startTurnClock(ctx);
 }

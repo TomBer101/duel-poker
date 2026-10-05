@@ -54,9 +54,9 @@ export type MultiplayerGame = Omit<SoloGame, "aiThinking"> & {
  */
 export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGame {
   const { db, roomId, you, gameNumber } = opts;
-  const { state, dispatch, getEvents } = useGameEngine({ mode: "multiplayer", firstTurn: "p1" });
+  const { state, dispatch, getEvents, hasPendingDispatch } = useGameEngine({ mode: "multiplayer", firstTurn: "p1" });
   const protocolHandle = useProtocol();
-  const shuffle = useShuffle({ db, roomId, you, gameNumber, state, dispatch, ...protocolHandle });
+  const shuffle = useShuffle({ db, roomId, you, gameNumber, state, dispatch, hasPendingDispatch, ...protocolHandle });
 
   // Cross-module refs: created once here, shared through ctx (see SharedRefs).
   const refs: SharedRefs = {
@@ -68,8 +68,9 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
     claimedWin: useRef(false),
     rematchVoted: useRef(false),
     seenKeys: useRef<Set<string>>(new Set()),
+    lastSeq: useRef(0),
   };
-  const ctx: MultiplayerCtx = { db, roomId, you, gameNumber, state, dispatch, ...protocolHandle, ...shuffle, refs };
+  const ctx: MultiplayerCtx = { db, roomId, you, gameNumber, state, dispatch, hasPendingDispatch, ...protocolHandle, ...shuffle, refs };
 
   useOpeningDeal(ctx);
   useOpponentEvents(ctx);

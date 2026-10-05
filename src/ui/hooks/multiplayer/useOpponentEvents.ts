@@ -15,9 +15,9 @@ import { commitOwnFaceDownCard } from "./myMoves";
 const MAX_OWN_HIDDEN_TIMEOUT_RETRIES = 3;
 const OWN_HIDDEN_TIMEOUT_RETRY_DELAY_MS = 300;
 
-/** One logged event (with its push key) not yet applied locally. */
-export type Queued = { key: string; event: GameEvent };
-/** The not-yet-applied events (FIFO, log order); handlers inspect only the head. */
+/** One logged event (with its push key and position) not yet applied locally. */
+export type Queued = { key: string; seq: number; event: GameEvent };
+/** The not-yet-applied events, sorted by `seq`; handlers inspect only the head. */
 type Queue = RefObject<Queued[]>;
 export type Deadline = RefObject<{ drawIndex: number; at: number } | null>;
 type TimeoutEvent = Extract<GameEvent, { type: "TIMEOUT" | "TIMEOUT_HIDDEN" }>;
@@ -29,15 +29,18 @@ type ReplaceEvent = Extract<GameEvent, { type: "REPLACE" }>;
  * Subscription intake, key-deduped: every event in the log is queued exactly
  * once, whoever authored it. A key already in `seen` is either a duplicate
  * delivery or my own live write (registered before publishing, applied
- * locally on the ack), so it is skipped. Every published event type carries
- * `by` (the security rules require it); anything else is dropped as malformed.
- * Returns true when the event was queued.
+ * locally on the ack), so it is skipped. Delivery order is not the game order
+ * (push keys follow each client's own clock), so the queue is kept sorted by
+ * `seq`, the rules-enforced position. Every published event carries `by` (the
+ * rules require it); anything else is dropped as malformed. Returns true when
+ * the event was queued.
  */
-export function enqueueOnce(seen: Set<string>, queue: Queued[], event: GameEvent, key: string): boolean {
+export function enqueueOnce(seen: Set<string>, queue: Queued[], event: GameEvent, key: string, seq: number): boolean {
   if (seen.has(key)) return false;
   seen.add(key);
   if (!("by" in event)) return false;
-  queue.push({ key, event });
+  const at = queue.findIndex((q) => q.seq > seq);
+  queue.splice(at === -1 ? queue.length : at, 0, { key, seq, event });
   return true;
 }
 
@@ -63,8 +66,8 @@ export function useOpponentEvents(ctx: MultiplayerCtx): void {
   // and echoes my own writes, both deduped by push key in enqueueOnce.
   useEffect(
     () =>
-      subscribeToEvents(db, roomId, (event, key) => {
-        if (enqueueOnce(refs.seenKeys.current, queue.current, event, key)) bumpTick();
+      subscribeToEvents(db, roomId, (event, key, seq) => {
+        if (enqueueOnce(refs.seenKeys.current, queue.current, event, key, seq)) bumpTick();
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- bumpTick only touches state setters and a ref, refs are stable; deps unchanged from the pre-split hook
     [db, roomId],
@@ -78,14 +81,30 @@ export function useOpponentEvents(ctx: MultiplayerCtx): void {
 }
 
 /**
- * Applies, waits on or rejects the queue head. Author: END_TURN/REPLACE are
- * written by `by`; TIMEOUT/TIMEOUT_HIDDEN/FORFEIT name the AFFECTED player in
- * `by` and are written by the other seat (the rules enforce both).
+ * Applies, waits on or rejects the queue head, strictly in `seq` order: only
+ * the event at `lastSeq + 1` is handled; a later one waits for the gap to
+ * fill. Author: END_TURN/REPLACE are written by `by`; TIMEOUT/TIMEOUT_HIDDEN/
+ * FORFEIT name the AFFECTED player in `by` and are written by the other seat
+ * (the rules enforce both). Skipped while an earlier effect of this commit has
+ * dispatched (stale `state`); the re-render re-runs it.
  */
 export function applyHead(ctx: MultiplayerCtx, queue: Queue, deadline: Deadline): void {
-  if (!ctx.role) return;
-  const event = queue.current[0]?.event;
-  if (!event) return;
+  if (!ctx.role || ctx.hasPendingDispatch()) return;
+  const head = queue.current[0];
+  if (!head) return;
+  const { lastSeq } = ctx.refs;
+  if (head.seq <= lastSeq.current) {
+    // Already applied (e.g. my own move, applied on its ack): drop it.
+    queue.current.shift();
+    ctx.bumpTick();
+    return;
+  }
+  if (head.seq > lastSeq.current + 1) return; // gap: wait for the missing event
+  dispatchHead(ctx, queue, deadline, head.event);
+  if (queue.current[0] !== head) lastSeq.current = head.seq; // consumed (applied or rejected)
+}
+
+function dispatchHead(ctx: MultiplayerCtx, queue: Queue, deadline: Deadline, event: GameEvent): void {
   if (event.type === "REPLACE") {
     handleReplace(ctx, queue, event);
   } else if (event.type === "TIMEOUT" || event.type === "TIMEOUT_HIDDEN") {
@@ -241,6 +260,13 @@ function handleTimeout(ctx: MultiplayerCtx, queue: Queue, deadline: Deadline, ev
     return;
   }
   queue.current.shift();
+  if (event.type === "TIMEOUT_HIDDEN") {
+    // The dealer's hidden turn auto-placed a card I never see: record its
+    // hand and draw like a PLACE_HIDDEN, so the reveal batch can be checked.
+    const handIndex = getAutoPlaceIndex(state.hands[event.by]);
+    const drawIndex = state.drawCount;
+    ctx.updateProtocol("hidden timeout draw", (cur) => recordHiddenDraw(cur, handIndex, drawIndex));
+  }
   dispatch(event);
 }
 

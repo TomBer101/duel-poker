@@ -49,16 +49,17 @@ describe("publishEvent / subscribeToEvents", () => {
     };
     const advanceEvent: GameEvent = { type: "ADVANCE_REVEAL" };
 
-    await publishEvent(db, roomId, dealEvent);
-    await publishEvent(db, roomId, advanceEvent);
+    await publishEvent(db, roomId, dealEvent, { seq: 1 });
+    await publishEvent(db, roomId, advanceEvent, { seq: 2 });
 
     const snapshot = await get(ref(db, `rooms/${roomId}/events`));
     const events = Object.values(snapshot.val() as Record<string, GameEvent>);
-    expect(events).toEqual([dealEvent, advanceEvent]);
+    expect(events).toEqual([{ ...dealEvent, seq: 1 }, { ...advanceEvent, seq: 2 }]);
+    expect((await get(ref(db, `rooms/${roomId}/meta/eventSeq`))).val()).toBe(2);
   });
 
   test("optionally updates meta/turn atomically with the event", async () => {
-    await publishEvent(db, roomId, { type: "ADVANCE_REVEAL" }, "p2");
+    await publishEvent(db, roomId, { type: "ADVANCE_REVEAL" }, { seq: 1, nextTurn: "p2" });
 
     const snapshot = await get(ref(db, `rooms/${roomId}/meta/turn`));
     expect(snapshot.val()).toBe("p2");
@@ -66,16 +67,19 @@ describe("publishEvent / subscribeToEvents", () => {
 
   test("subscribeToEvents delivers each event once, in append order", async () => {
     const received: GameEvent[] = [];
-    const unsubscribe = subscribeToEvents(db, roomId, (event) => {
+    const seqs: number[] = [];
+    const unsubscribe = subscribeToEvents(db, roomId, (event, _key, seq) => {
       received.push(event);
+      seqs.push(seq);
     });
 
-    await publishEvent(db, roomId, { type: "ADVANCE_REVEAL" });
-    await publishEvent(db, roomId, { type: "REMATCH", dealer: "p1" });
+    await publishEvent(db, roomId, { type: "ADVANCE_REVEAL" }, { seq: 1 });
+    await publishEvent(db, roomId, { type: "REMATCH", dealer: "p1" }, { seq: 2 });
 
     await vi.waitFor(() => expect(received).toHaveLength(2));
     expect(received[0]).toEqual({ type: "ADVANCE_REVEAL" });
-    expect(received[1]).toEqual({ type: "REMATCH", dealer: "p1" });
+    expect(received[1]).toEqual({ type: "REMATCH", dealer: "p1" }); // wire seq stripped
+    expect(seqs).toEqual([1, 2]);
 
     unsubscribe();
   });
@@ -86,13 +90,13 @@ describe("publishEvent / subscribeToEvents", () => {
       keys.push(key);
     });
     const supplied = newEventKey(db, roomId);
-    expect(await publishEvent(db, roomId, { type: "ADVANCE_REVEAL" }, undefined, supplied)).toBe(supplied);
-    const generated = await publishEvent(db, roomId, { type: "ADVANCE_REVEAL" });
+    expect(await publishEvent(db, roomId, { type: "ADVANCE_REVEAL" }, { seq: 1, key: supplied })).toBe(supplied);
+    const generated = await publishEvent(db, roomId, { type: "ADVANCE_REVEAL" }, { seq: 2 });
     expect(generated).not.toBe(supplied);
 
     await vi.waitFor(() => expect(keys).toEqual([supplied, generated]));
     const snapshot = await get(ref(db, `rooms/${roomId}/events/${supplied}`));
-    expect(snapshot.val()).toEqual({ type: "ADVANCE_REVEAL" });
+    expect(snapshot.val()).toEqual({ type: "ADVANCE_REVEAL", seq: 1 });
     unsubscribe();
   });
 });

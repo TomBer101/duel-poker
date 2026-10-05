@@ -2,12 +2,14 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { gameReducer } from "../../../engine/reducer";
 import { autoPlacePlacingPhase } from "../../../engine/testkit";
 import type { GameState } from "../../../engine/types";
-import { newEventKey, publishEvent, publishReveal } from "../../../net/sync";
+import { fetchReveals, newEventKey, publishEvent, publishReveal } from "../../../net/sync";
+import { derivePlacementSalt } from "../../../crypto/protocol";
+import { commitPlacement } from "../../../crypto/protocolController";
 import { publishTurnStarted } from "../../../net/roomState";
-import { claimWin, placePending, replace, timeout } from "./myMoves";
+import { claimWin, commitOwnFaceDownCard, placePending, replace, timeout } from "./myMoves";
 import { before, deck, dealt, drawn, endTurn, fakeCtx } from "./testCtx";
 
-vi.mock("../../../net/sync", () => ({ newEventKey: vi.fn(), publishEvent: vi.fn(), publishReveal: vi.fn() }));
+vi.mock("../../../net/sync", () => ({ newEventKey: vi.fn(), publishEvent: vi.fn(), publishReveal: vi.fn(), fetchReveals: vi.fn() }));
 vi.mock("../../../net/roomState", () => ({ publishTurnStarted: vi.fn(), publishRematchVote: vi.fn() }));
 
 const denied = () => Promise.reject(new Error("PERMISSION_DENIED: Permission denied"));
@@ -17,21 +19,24 @@ beforeEach(() => {
   vi.mocked(newEventKey).mockReturnValue("k1");
   vi.mocked(publishEvent).mockResolvedValue("k1");
   vi.mocked(publishReveal).mockResolvedValue();
+  vi.mocked(fetchReveals).mockResolvedValue([]);
   vi.mocked(publishTurnStarted).mockResolvedValue();
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
 describe("placePending — publish-then-apply", () => {
-  test("registers the key before the write, publishes under it, applies only after the ack", async () => {
+  test("registers the key before the write, publishes at lastSeq + 1 under it, applies only after the ack", async () => {
     const ctx = fakeCtx(drawn(before(10)), "p1", "selector");
+    ctx.refs.lastSeq.current = 4;
     vi.mocked(publishEvent).mockImplementation(async () => {
       expect(ctx.refs.seenKeys.current.has("k1")).toBe(true); // echo may beat the ack
       expect(ctx.dispatch).not.toHaveBeenCalled();
       return "k1";
     });
     await placePending(ctx, [0, 1, 2, 3, 4], 0);
-    expect(publishEvent).toHaveBeenCalledWith(ctx.db, "room", endTurn("p1", 0), "p2", "k1");
+    expect(publishEvent).toHaveBeenCalledWith(ctx.db, "room", endTurn("p1", 0), { seq: 5, nextTurn: "p2", key: "k1" });
     expect(ctx.dispatch).toHaveBeenCalledWith(endTurn("p1", 0));
+    expect(ctx.refs.lastSeq.current).toBe(5); // the intake moves past my position
     expect(publishTurnStarted).toHaveBeenCalled();
   });
 
@@ -106,6 +111,30 @@ describe("a rules denial leaves local state untouched and clears the in-flight g
     expect(ctx.refs.ownSlotDraw.current.size).toBe(0);
     expect(publishReveal).toHaveBeenCalledTimes(committed ? 1 : 0);
     expect(publishTurnStarted).not.toHaveBeenCalled();
+    expect(ctx.refs.lastSeq.current).toBe(0); // position not taken: abandoned cleanly
+  });
+});
+
+describe("commitOwnFaceDownCard (own hidden-timeout translation)", () => {
+  const card = deck[40];
+  const commitment = async () => commitPlacement(card, 0, await derivePlacementSalt(new Uint8Array(16), 0, 40));
+
+  test("publishes the commit when the reveal log does not have it yet (live)", async () => {
+    const ctx = fakeCtx(drawn(before(40)), "p1", "dealer");
+    await commitOwnFaceDownCard(ctx, 0, card, 40);
+    expect(publishReveal).toHaveBeenCalledWith(ctx.db, "room", { kind: "placementCommit", by: "p1", handIndex: 0, commitment: await commitment() });
+    expect(ctx.refs.ownSlotDraw.current.get(0)).toBe(40);
+  });
+
+  test("never republishes an identical commit already in the log (catch-up); still rebuilds ownSlotDraw", async () => {
+    vi.mocked(fetchReveals).mockResolvedValue([
+      { kind: "placementCommit", by: "p1", handIndex: 0, commitment: await commitment() },
+      { kind: "placementCommit", by: "p1", handIndex: 0, commitment: "later-swap" },
+    ]);
+    const ctx = fakeCtx(drawn(before(40)), "p1", "dealer");
+    await commitOwnFaceDownCard(ctx, 0, card, 40);
+    expect(publishReveal).not.toHaveBeenCalled();
+    expect(ctx.refs.ownSlotDraw.current.get(0)).toBe(40);
   });
 });
 

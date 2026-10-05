@@ -46,6 +46,7 @@ export function fakeCtx(state: GameState, you: PlayerId, role: "dealer" | "selec
     role,
     state,
     dispatch: vi.fn(),
+    hasPendingDispatch: () => false,
     recordViolation: vi.fn(),
     updateProtocol: vi.fn(),
     warnOnce: vi.fn(),
@@ -59,6 +60,7 @@ export function fakeCtx(state: GameState, you: PlayerId, role: "dealer" | "selec
       claimedWin: { current: false },
       rematchVoted: { current: false },
       seenKeys: { current: new Set<string>() },
+      lastSeq: { current: 0 },
     },
   };
   return ctx as typeof ctx & MultiplayerCtx;

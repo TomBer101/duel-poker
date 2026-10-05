@@ -7,7 +7,7 @@ import type { MultiplayerCtx } from "./context";
 
 /** Assembles the 10 verified opening-deal draws into one DEAL event. */
 export function useOpeningDeal(ctx: MultiplayerCtx): void {
-  const { db, roomId, role, protocol, dispatch } = ctx;
+  const { db, roomId, role, protocol, dispatch, hasPendingDispatch } = ctx;
   const dealBuffer = useRef<Map<number, Card>>(new Map());
   const dealt = useRef(false);
 
@@ -15,7 +15,7 @@ export function useOpeningDeal(ctx: MultiplayerCtx): void {
   // in, dispatch one DEAL event — both clients compute this independently
   // from the same verified reveals, so no coordination is needed.
   useEffect(() => {
-    if (!role || dealt.current) return;
+    if (!role || dealt.current || hasPendingDispatch()) return;
     for (let i = 0; i < DEAL_SLOTS.length; i++) {
       if (dealBuffer.current.has(i)) continue;
       const card = resolvedDraw(protocol.current, i);

@@ -1,4 +1,5 @@
 import {
+  get,
   onChildAdded,
   onDisconnect,
   onValue,
@@ -10,23 +11,31 @@ import {
 } from "firebase/database";
 import type { GameEvent, PlayerId } from "../engine/types";
 
+export type PublishOptions = {
+  /** The event's position in the game's total order: the counter's next value. */
+  seq: number;
+  /** Set when the event changes whose turn it is. */
+  nextTurn?: PlayerId;
+  /** Pre-generated push key (see {@link newEventKey}). */
+  key?: string;
+};
+
 /**
- * Appends an event under /rooms/{roomId}/events using a Firebase push key
- * (chronologically ordered, collision-free — no two clients can ever
- * generate the same one, so no "next index" arithmetic is needed) and —
- * when the event changes whose turn it is — atomically updates
- * /rooms/{roomId}/meta/turn in the same multi-path write. Writes under `key`
- * when given (see {@link newEventKey}) and resolves to the key used.
+ * Appends an event under /rooms/{roomId}/events/{key} carrying `seq`, and in
+ * the same multi-path write bumps /meta/eventSeq to `seq` (the rules require
+ * `seq == previous counter + 1`, so exactly one writer wins each position:
+ * push keys alone are NOT causally ordered across clients) and, when given,
+ * sets /meta/turn. Resolves to the key used.
  */
 export async function publishEvent(
   db: Database,
   roomId: string,
   event: GameEvent,
-  nextTurn?: PlayerId,
-  key: string = newEventKey(db, roomId),
+  { seq, nextTurn, key = newEventKey(db, roomId) }: PublishOptions,
 ): Promise<string> {
   const updates: Record<string, unknown> = {
-    [`rooms/${roomId}/events/${key}`]: event,
+    [`rooms/${roomId}/events/${key}`]: { ...event, seq },
+    [`rooms/${roomId}/meta/eventSeq`]: seq,
   };
   if (nextTurn) {
     updates[`rooms/${roomId}/meta/turn`] = nextTurn;
@@ -45,19 +54,27 @@ export function newEventKey(db: Database, roomId: string): string {
 }
 
 /**
- * Fires `callback` once per event with its push key, in append order,
- * including ones already present.
+ * Fires `callback` once per event (without its wire `seq`) with its push key
+ * and `seq`, including ones already present. Delivery order is NOT the game
+ * order: order by `seq`.
  */
 export function subscribeToEvents(
   db: Database,
   roomId: string,
-  callback: (event: GameEvent, key: string) => void,
+  callback: (event: GameEvent, key: string, seq: number) => void,
 ): () => void {
   const eventsRef = ref(db, `rooms/${roomId}/events`);
   const unsubscribe = onChildAdded(eventsRef, (snapshot) => {
-    callback(snapshot.val() as GameEvent, snapshot.key!);
+    const { seq, ...event } = snapshot.val() as GameEvent & { seq: number };
+    callback(event as GameEvent, snapshot.key!, seq);
   });
   return unsubscribe;
+}
+
+/** One-shot read of the room's protocol reveal log (in key order). */
+export async function fetchReveals(db: Database, roomId: string): Promise<ProtocolReveal[]> {
+  const snapshot = await get(ref(db, `rooms/${roomId}/protocol/reveals`));
+  return Object.values((snapshot.val() as Record<string, ProtocolReveal> | null) ?? {});
 }
 
 /** Marks `player` present in the room and clears it automatically on disconnect. */

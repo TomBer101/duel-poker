@@ -6,12 +6,15 @@ import type { MultiplayerCtx } from "./context";
 
 /** Resolves each per-turn draw (placing or replace) into a DRAW / REPLACE_DRAW. */
 export function useTurnDraws(ctx: MultiplayerCtx): void {
-  const { you, role, state, dispatch, protocol, dealerState } = ctx;
+  const { you, role, state, dispatch, hasPendingDispatch, protocol, dealerState } = ctx;
 
   // Resolve this turn's draw into a DRAW / REPLACE_DRAW as soon as its reveals
-  // verify. Both clients do this independently, exactly like DEAL.
+  // verify. Both clients do this independently, exactly like DEAL. Skipped
+  // while an earlier effect of this commit dispatched (e.g. the intake applied
+  // a TIMEOUT that already consumed this draw): `state` is stale until the
+  // re-render, which re-runs this.
   useEffect(() => {
-    if (!role) return;
+    if (!role || hasPendingDispatch()) return;
     if (state.phase !== "placing" && state.phase !== "replace") return;
     if (state.pendingCard !== null) return;
     const drawIndex = state.drawCount;
