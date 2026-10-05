@@ -1458,4 +1458,35 @@ describe("useMultiplayerGame - refresh (real rules, two clients, no stubs)", () 
     expect((await get(ref(db, `rooms/${roomId}/scoredGame`))).val()).toBe(gameNumber);
     expect(second.result.current.hasViolation).toBe(false);
   }, 60000);
+
+  test("(f) a full game without a forfeit paces through the reveal to the same result on both clients", async () => {
+    // Both seats as GameScreen wires them (game + session score), with a fast
+    // reveal pacer. Without the pacer the game stalls in phase "reveal".
+    const mountPaced = (seat: PlayerId): Instance =>
+      renderHook(() => {
+        const g = useMultiplayerGame({ db: seatDb(seat), roomId, you: seat, gameNumber: 1, revealStepMs: 50 });
+        useSessionScore(seatDb(seat), roomId, seat, 1, g.state);
+        return g;
+      });
+    const clients: Record<PlayerId, Instance> = { p1: mountPaced("p1"), p2: mountPaced("p2") };
+    await drivePlacingTurns(clients, 40);
+    await finishReplace(clients, { p1: 2, p2: null });
+    await waitFor(
+      () => {
+        expect(clients.p1.result.current.state.phase).toBe("result");
+        expect(clients.p2.result.current.state.phase).toBe("result");
+      },
+      { timeout: 8000 },
+    );
+    expect(clients.p1.result.current.state).toEqual(clients.p2.result.current.state);
+    expect(clients.p1.result.current.state.forfeitedBy).toBeNull();
+    expect(clients.p1.result.current.hasViolation).toBe(false);
+    expect(clients.p2.result.current.hasViolation).toBe(false);
+
+    // Only the winner scores, exactly once; a draw scores nobody.
+    await settle(1200);
+    const winner = clients.p1.result.current.state.result!.winner;
+    const score = (await get(ref(db, `rooms/${roomId}/score`))).val() as Partial<Record<PlayerId, number>> | null;
+    expect(score ?? {}).toEqual(winner === "draw" ? {} : { [winner]: 1 });
+  }, 120000);
 });

@@ -3,6 +3,7 @@ import type { Database } from "firebase/database";
 import { getLegalHands } from "../../../engine/placement";
 import type { PlayerId } from "../../../engine/types";
 import { useGameEngine } from "../useGameEngine";
+import { useRevealPacer } from "../useRevealPacer";
 import type { SoloGame } from "../useSoloGame";
 import type { MultiplayerCtx, SharedRefs } from "./context";
 import { claimWin, placePending, playAgain, replace, timeout } from "./myMoves";
@@ -21,6 +22,8 @@ export type MultiplayerGameOptions = {
   you: PlayerId;
   /** Distinguishes seeds/log state across rematches in the same room. */
   gameNumber: number;
+  /** Test-only seam: the reveal pacer's step (defaults to REVEAL_STEP_MS). */
+  revealStepMs?: number;
 };
 
 /**
@@ -51,7 +54,7 @@ export type MultiplayerGame = Omit<SoloGame, "aiThinking"> & {
  * subscription, seed/commitments, commitments subscription, selector position
  * reveals (opening, per-turn), reveals subscription, DEAL assembly, events
  * subscription, intake, per-turn DRAW, batch publish, batch verify,
- * REVEAL_FACE_DOWN. Several effects are deliberately dependency-less: the data
+ * REVEAL_FACE_DOWN, then the local reveal pacer. Several effects are deliberately dependency-less: the data
  * they wait on lives in refs, and `bumpTick` forces the re-render that makes
  * them re-check.
  */
@@ -81,6 +84,10 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
   useOpponentEvents(ctx);
   useTurnDraws(ctx);
   useRevealPhase(ctx);
+  // Local-only and deterministic: each client paces its own reveal from the
+  // same REVEAL_FACE_DOWN state; ADVANCE_REVEAL is never published. Held on
+  // a violation, so a cheated game never reaches its result (or its score).
+  useRevealPacer(state, dispatch, opts.revealStepMs, !protocolHandle.violated);
   const { rematchRequested } = useRematch(ctx);
   usePresence(db, roomId, you);
 
