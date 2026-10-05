@@ -6,6 +6,7 @@ import { loadSeed } from "../../../crypto/seedStorage";
 import { incrementScore, publishRematchVote, resetForRematch, subscribeToGameNumber, subscribeToScore } from "../../../net/roomState";
 import { createRoom, joinRoom } from "../../../net/room";
 import { useMultiplayerGame } from "./useMultiplayerGame";
+import { useSessionScore } from "./useSessionScore";
 import { get, goOffline, goOnline, ref, type Database } from "firebase/database";
 import type { PlayerId } from "../../../engine/types";
 import { publishEvent, publishReveal, setupPresence, subscribeToPresence, type ProtocolReveal } from "../../../net/sync";
@@ -1228,4 +1229,217 @@ describe("useMultiplayerGame - catch-up from the logs (simulated refresh)", () =
     const normalized = (rs: ProtocolReveal[]) => rs.map((r) => ({ ...r, cards: (r as { cards?: unknown[] }).cards ?? [] }));
     await waitFor(() => expect(normalized(catchUpControl!.republished)).toEqual(normalized([...liveBatch, ...liveBatch])), { timeout: 5000 });
   }, 120000);
+});
+
+describe("useMultiplayerGame - refresh (real rules, two clients, no stubs)", () => {
+  // A refresh UNMOUNTS the seat's instance and mounts a fresh one with the
+  // same seat and gameNumber; jsdom's localStorage (the stored seed) survives,
+  // every in-memory ref does not. Nothing here intercepts any write.
+  type Game = ReturnType<typeof useMultiplayerGame>;
+  type Instance = { result: { current: Game }; unmount: () => void };
+  const seatDb = (seat: PlayerId) => (seat === "p1" ? db : db2);
+  const mount = (seat: PlayerId, gameNumber: number): Instance =>
+    renderHook(() => useMultiplayerGame({ db: seatDb(seat), roomId, you: seat, gameNumber }));
+  /** The winner's GameScreen in miniature: the game plus its session score. */
+  const mountScored = (seat: PlayerId, gameNumber: number): Instance =>
+    renderHook(() => {
+      const g = useMultiplayerGame({ db: seatDb(seat), roomId, you: seat, gameNumber });
+      useSessionScore(seatDb(seat), roomId, seat, gameNumber, g.state);
+      return g;
+    });
+  const reveals = async () =>
+    Object.values(((await get(ref(db, `rooms/${roomId}/protocol/reveals`))).val() ?? {}) as Record<string, ProtocolReveal>);
+  const ownReveals = async (seat: PlayerId) => (await reveals()).filter((r) => r.by === seat);
+  const settle = (ms = 600) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  /** Simulated refresh: the fresh instance must rebuild the identical state. */
+  async function refresh(old: Instance, seat: PlayerId, gameNumber: number): Promise<Instance> {
+    const before = old.result.current.state;
+    old.unmount();
+    const fresh = mount(seat, gameNumber);
+    await waitFor(() => expect(fresh.result.current.state).toEqual(before), { timeout: 15000 });
+    return fresh;
+  }
+
+  async function startGame(dealer: PlayerId) {
+    await dealtBy(dealer);
+    const gameNumber = dealer === "p1" ? 1 : 2;
+    const clients: Record<PlayerId, Instance> = { p1: mount("p1", gameNumber), p2: mount("p2", gameNumber) };
+    await waitFor(() => expect(clients.p1.result.current.state.drawCount).toBeGreaterThanOrEqual(10), { timeout: 5000 });
+    return { clients, gameNumber };
+  }
+
+  /** Both replace in order (p1 then p2), then both reach the same result. */
+  async function finishReplace(clients: Record<PlayerId, Instance>, swaps: Record<PlayerId, number | null>) {
+    for (const who of ["p1", "p2"] as const) {
+      const c = clients[who];
+      await waitFor(
+        () => {
+          expect(c.result.current.state.phase).toBe("replace");
+          expect(c.result.current.state.turn).toBe(who);
+          expect(c.result.current.state.pendingCard).not.toBeNull();
+        },
+        { timeout: 8000 },
+      );
+      await act(async () => {
+        await c.result.current.replace(swaps[who]);
+      });
+    }
+    await waitFor(
+      () => {
+        expect(clients.p1.result.current.state.result).not.toBeNull();
+        expect(clients.p2.result.current.state.result).not.toBeNull();
+        expect(clients.p1.result.current.state.hands).toEqual(clients.p2.result.current.state.hands);
+      },
+      { timeout: 10000 },
+    );
+    expect(clients.p1.result.current.state.result).toEqual(clients.p2.result.current.state.result);
+  }
+
+  /** One batch per player and every placementCommit accounted for. */
+  async function expectCleanLog(dealer: PlayerId, hiddenSwaps: number) {
+    const all = await reveals();
+    for (const who of ["p1", "p2"] as const) {
+      expect(all.filter((r) => r.kind === "placementReveal" && r.by === who)).toHaveLength(1);
+    }
+    expect(all.filter((r) => r.kind === "placementCommit" && r.by === dealer)).toHaveLength(5 + hiddenSwaps);
+  }
+
+  test("(a) the selector refreshes mid-placing, after a dealer hidden placement: identical state, the game finishes", async () => {
+    const { clients, gameNumber } = await startGame("p2"); // p2 deals, p1 selects
+    // 32 turns: turn 31 is the dealer's first hidden placement (draw 41), so
+    // p1's view now holds a card-less face-down slot in p2's hand.
+    await drivePlacingTurns(clients, 32);
+    await waitFor(() => expect(clients.p1.result.current.state.pendingCard).not.toBeNull(), { timeout: 8000 });
+    const p2Hands = clients.p1.result.current.state.hands.p2;
+    expect(p2Hands.some((h) => h.cards[4]?.faceUp === false && h.cards[4].card === undefined)).toBe(true);
+    const mineBefore = await ownReveals("p1");
+
+    clients.p1 = await refresh(clients.p1, "p1", gameNumber);
+    await settle();
+    expect(await ownReveals("p1")).toEqual(mineBefore); // nothing republished
+
+    await drivePlacingTurns(clients, 8);
+    await finishReplace(clients, { p1: null, p2: 1 });
+    await expectCleanLog("p2", 1);
+    expect(clients.p1.result.current.hasViolation).toBe(false);
+    expect(clients.p2.result.current.hasViolation).toBe(false);
+  }, 120000);
+
+  test("(b) the dealer refreshes during the reveal phase: its batch is not republished, no violation", async () => {
+    const { clients, gameNumber } = await startGame("p1"); // p1 deals
+    await drivePlacingTurns(clients, 40);
+    await finishReplace(clients, { p1: 2, p2: null });
+    await waitFor(
+      async () => expect((await ownReveals("p1")).filter((r) => r.kind === "placementReveal")).toHaveLength(1),
+      { timeout: 5000 },
+    );
+    expect(clients.p1.result.current.state.phase).toBe("reveal");
+    const mineBefore = await ownReveals("p1");
+
+    clients.p1 = await refresh(clients.p1, "p1", gameNumber);
+    await settle();
+    expect(await ownReveals("p1")).toEqual(mineBefore);
+    await expectCleanLog("p1", 1);
+    expect(clients.p1.result.current.state.result).toEqual(clients.p2.result.current.state.result);
+    expect(clients.p1.result.current.hasViolation).toBe(false);
+    expect(clients.p2.result.current.hasViolation).toBe(false);
+  }, 120000);
+
+  test("(c) the selector refreshes on its replace turn: identical state, the game finishes", async () => {
+    const { clients, gameNumber } = await startGame("p1"); // p1 deals, p2 selects
+    await drivePlacingTurns(clients, 40);
+    // The dealer swaps into a hidden slot; then it is the selector's turn.
+    await waitFor(() => expect(clients.p1.result.current.state.pendingCard).not.toBeNull(), { timeout: 8000 });
+    await act(async () => {
+      await clients.p1.result.current.replace(2);
+    });
+    await waitFor(
+      () => {
+        expect(clients.p2.result.current.state.turn).toBe("p2");
+        expect(clients.p2.result.current.state.pendingCard).not.toBeNull();
+      },
+      { timeout: 8000 },
+    );
+    const mineBefore = await ownReveals("p2");
+
+    clients.p2 = await refresh(clients.p2, "p2", gameNumber);
+    await settle();
+    expect(await ownReveals("p2")).toEqual(mineBefore);
+
+    await act(async () => {
+      await clients.p2.result.current.replace(null);
+    });
+    await waitFor(
+      () => {
+        expect(clients.p1.result.current.state.result).not.toBeNull();
+        expect(clients.p2.result.current.state.result).not.toBeNull();
+        expect(clients.p1.result.current.state.hands).toEqual(clients.p2.result.current.state.hands);
+      },
+      { timeout: 10000 },
+    );
+    expect(clients.p1.result.current.state.result).toEqual(clients.p2.result.current.state.result);
+    await expectCleanLog("p1", 1);
+    expect(clients.p1.result.current.hasViolation).toBe(false);
+    expect(clients.p2.result.current.hasViolation).toBe(false);
+  }, 120000);
+
+  test.each([
+    ["deleted", null],
+    ["of the wrong length", JSON.stringify(Array(8).fill(7))],
+  ] as const)("(d) a refresh with the stored seed %s: a clear violation, no crash, nothing overwritten", async (_, stored) => {
+    const { clients, gameNumber } = await startGame("p1"); // p2 is the selector
+    const commitments = (await get(ref(db, `rooms/${roomId}/protocol/commitments/selector`))).val();
+    const key = `duelPoker-${roomId}:${gameNumber}:p2`;
+    clients.p2.unmount();
+    if (stored === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, stored);
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fresh = mount("p2", gameNumber);
+    await waitFor(() => expect(fresh.result.current.hasViolation).toBe(true), { timeout: 8000 });
+    await settle();
+    expect(err.mock.calls.flat().join(" ")).toMatch(/cannot resume this game: my selector seed is missing or invalid/);
+    err.mockRestore();
+    // No new seed was generated over it, and the published commitments stand.
+    expect(localStorage.getItem(key)).toBe(stored);
+    expect((await get(ref(db, `rooms/${roomId}/protocol/commitments/selector`))).val()).toEqual(commitments);
+    expect(fresh.result.current.state.drawCount).toBe(0); // it never resumed
+    expect(clients.p1.result.current.hasViolation).toBe(false);
+  }, 30000);
+
+  test("(e) the winner refreshing on the result screen gets its point exactly once", async () => {
+    const { clients, gameNumber } = await startGame("p1");
+    // p1 wins by forfeit, but its first page never scored (a plain instance:
+    // as if it was closed before the score write).
+    await dropConnection(db2, "p2");
+    await act(async () => {
+      await clients.p1.result.current.claimWin();
+    });
+    goOnline(db2);
+    await waitFor(() => expect(clients.p1.result.current.state.phase).toBe("result"), { timeout: 8000 });
+    const score = async () => (await get(ref(db, `rooms/${roomId}/score/p1`))).val() as number | null;
+    expect(await score()).toBeNull();
+
+    // Refresh 1: the fresh page replays the log to the result and scores.
+    clients.p1.unmount();
+    const first = mountScored("p1", gameNumber);
+    await waitFor(() => expect(first.result.current.state.result?.winner).toBe("p1"), { timeout: 15000 });
+    await waitFor(async () => expect(await score()).toBe(1), { timeout: 5000 });
+
+    // Refresh 2: the rules reject the second increment; logged, not retried.
+    first.unmount();
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const second = mountScored("p1", gameNumber);
+    await waitFor(() => expect(second.result.current.state.result?.winner).toBe("p1"), { timeout: 15000 });
+    await waitFor(
+      () => expect(err).toHaveBeenCalledWith(expect.stringMatching(/score increment denied/), expect.anything()),
+      { timeout: 5000 },
+    );
+    await settle(1200); // past a retry delay: no second attempt
+    expect(err.mock.calls.filter(([m]) => /score increment/.test(String(m)))).toHaveLength(1);
+    err.mockRestore();
+    expect(await score()).toBe(1);
+    expect((await get(ref(db, `rooms/${roomId}/scoredGame`))).val()).toBe(gameNumber);
+    expect(second.result.current.hasViolation).toBe(false);
+  }, 60000);
 });
