@@ -1,5 +1,5 @@
 import type { RefObject } from "react";
-import type { Database } from "firebase/database";
+import type { Database } from "../../../net/firebase";
 import type { GameEvent, GameState, PlayerId } from "../../../engine/types";
 import type { DealerCommitmentState, SelectorCommitmentState } from "../../../crypto/protocol";
 import type { ProtocolControllerState } from "../../../crypto/protocolController";

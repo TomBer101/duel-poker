@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import type { Database } from "firebase/database";
+import type { Database } from "../../../net/firebase";
 import type { PlayerId } from "../../../engine/types";
 import { setupPresence, subscribeToConnection } from "../../../net/sync";
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Database } from "firebase/database";
+import type { Database } from "../../../net/firebase";
 import { otherPlayer } from "../../../engine/deck";
 import type { GameState, PlayerId } from "../../../engine/types";
 import { incrementScore, subscribeToScore } from "../../../net/roomState";

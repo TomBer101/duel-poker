@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
-import type { Database } from "firebase/database";
+import type { Database } from "../../../net/firebase";
 import type { GameState, PlayerId } from "../../../engine/types";
 import { incrementScore } from "../../../net/roomState";
 import { useSessionScore } from "./useSessionScore";

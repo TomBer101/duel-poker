@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import type { Database } from "firebase/database";
+import type { Database } from "../../../net/firebase";
 import { getLegalHands } from "../../../engine/placement";
 import type { PlayerId } from "../../../engine/types";
 import { useGameEngine } from "../useGameEngine";

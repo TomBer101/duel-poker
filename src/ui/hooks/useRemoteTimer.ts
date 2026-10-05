@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Database } from "firebase/database";
+import type { Database } from "../../net/firebase";
 import { subscribeToTurnStarted } from "../../net/roomState";
 
 const TICK_MS = 200;
