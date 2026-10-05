@@ -70,6 +70,7 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
     seenKeys: useRef<Set<string>>(new Set()),
     lastSeq: useRef(0),
     batchPublished: useRef(false),
+    resumed: useRef(false),
   };
   const shuffle = useShuffle({ db, roomId, you, gameNumber, state, dispatch, hasPendingDispatch, ...protocolHandle, refs });
   const ctx: MultiplayerCtx = { db, roomId, you, gameNumber, state, dispatch, hasPendingDispatch, ...protocolHandle, ...shuffle, refs };

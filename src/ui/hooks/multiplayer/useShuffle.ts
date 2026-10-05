@@ -41,6 +41,7 @@ import type { ShuffleHandle, ShuffleInput } from "./context";
 export function useShuffle(ctx: ShuffleInput): ShuffleHandle {
   const { db, roomId, you, gameNumber, state, protocol, protocolTick, bumpTick, updateProtocol, recordViolation, refs } = ctx;
   const batchPublishedRef = refs.batchPublished;
+  const resumedRef = refs.resumed;
   const [dealer, setDealer] = useState<PlayerId | null>(null);
   // My shuffle state is set and my publish guards are seeded from the log.
   const [ready, setReady] = useState(false);
@@ -77,8 +78,9 @@ export function useShuffle(ctx: ShuffleInput): ShuffleHandle {
       recordViolation(message);
     };
     (async () => {
-      const [published, log] = await Promise.all([fetchCommitments(db, roomId, role), fetchReveals(db, roomId)]);
-      if (cancelled) return;
+      const logs = await readWithRetry(() => Promise.all([fetchCommitments(db, roomId, role), fetchReveals(db, roomId)]), () => cancelled);
+      if (!logs || cancelled) return;
+      const [published, log] = logs;
       let seed = loadSeed(roomId, gameNumber, you);
       if (!seed) {
         if (published) {
@@ -100,11 +102,23 @@ export function useShuffle(ctx: ShuffleInput): ShuffleHandle {
         else if (r.kind === "card") publishedCard.current.add(r.position);
         else if (r.kind === "placementReveal") batchPublishedRef.current = true;
       }
+      // A recovering instance (my commitments were already out) never
+      // restamps the turn clock (see useOpeningDeal).
+      resumedRef.current = published !== null;
       if ("deck" in mine) dealerState.current = mine;
       else selectorState.current = mine;
       setReady(true);
       bumpTick();
-      if (!published) await publishCommitments(db, roomId, role, mine.commitments);
+      if (published) return;
+      try {
+        await publishCommitments(db, roomId, role, mine.commitments);
+      } catch (err) {
+        // A lost ack (or a racing tab) can reject a write that did land:
+        // only a log WITHOUT my exact commitments is a failure.
+        const now = await fetchCommitments(db, roomId, role).catch(() => null);
+        if (!now || !sameList(now, mine.commitments)) throw err;
+        console.warn("[useMultiplayerGame] commitment publish rejected, but my commitments are in the log", err);
+      }
     })().catch((err: unknown) => {
       if (cancelled) return;
       console.error("[useMultiplayerGame] shuffle setup failed", err);
@@ -262,6 +276,26 @@ export function useShuffle(ctx: ShuffleInput): ShuffleHandle {
   }, [db, roomId, you, role, dealer, ready]);
 
   return { dealer, role, dealerState, selectorState };
+}
+
+const SETUP_READ_ATTEMPTS = 3;
+const SETUP_READ_RETRY_DELAY_MS = 300;
+
+/**
+ * Runs a setup read, retrying a transient failure up to SETUP_READ_ATTEMPTS
+ * in total; the last failure is thrown. Resolves null once cancelled.
+ */
+export async function readWithRetry<T>(read: () => Promise<T>, cancelled: () => boolean): Promise<T | null> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await read();
+    } catch (err) {
+      if (attempt >= SETUP_READ_ATTEMPTS) throw err;
+      console.warn(`[useMultiplayerGame] shuffle setup read failed (attempt ${attempt}), retrying`, err);
+      await new Promise((resolve) => setTimeout(resolve, SETUP_READ_RETRY_DELAY_MS));
+      if (cancelled()) return null;
+    }
+  }
 }
 
 const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);

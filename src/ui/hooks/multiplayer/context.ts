@@ -53,6 +53,10 @@ export type SharedRefs = {
   // refreshed client never publishes a second batch (a violation for the
   // opponent).
   batchPublished: RefObject<boolean>;
+  // This mount resumed a game whose commitments I had already published (a
+  // refresh): set by useShuffle before `ready`; useOpeningDeal then never
+  // restamps the turn clock.
+  resumed: RefObject<boolean>;
   // Push keys of events already applied (or being published by me): the
   // intake applies every other event in the log exactly once.
   seenKeys: RefObject<Set<string>>;
