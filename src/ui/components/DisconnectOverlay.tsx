@@ -22,7 +22,7 @@ export function DisconnectOverlay({ opponentPresent, canClaim, onClaimWin }: Dis
   return (
     <div className={styles.overlay} role="dialog" aria-modal="true" aria-label="Opponent disconnected">
       {expired && !canClaim ? (
-        <p className={styles.message}>Waiting for the game to start…</p>
+        <p className={styles.message}>Waiting for the game to startâ€¦</p>
       ) : expired ? (
         <>
           <p className={styles.message}>Your opponent has not reconnected.</p>

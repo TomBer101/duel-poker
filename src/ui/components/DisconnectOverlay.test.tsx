@@ -48,7 +48,7 @@ describe("DisconnectOverlay", () => {
       vi.advanceTimersByTime(60_000);
     });
     expect(screen.queryByRole("button", { name: /claim win/i })).not.toBeInTheDocument();
-    expect(screen.getByText(/waiting for the game to start/i)).toBeInTheDocument();
+    expect(screen.getByText("Waiting for the game to start…")).toBeInTheDocument();
     rerender(<DisconnectOverlay opponentPresent={false} canClaim onClaimWin={onClaimWin} />);
     expect(screen.getByRole("button", { name: /claim win/i })).toBeInTheDocument();
   });
