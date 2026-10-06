@@ -418,6 +418,7 @@ Polished, playable game ready to share with friends.
 This repo is also the developer's proof-of-concept for [graphify](https://github.com/safishamsi/graphify):
 a tool that turns the codebase + docs into a persistent, queryable knowledge graph
 (god nodes, community detection, cross-file relationships).
+I would like to learn how does claude uses it, and how can I use it. For instance, query flows (i.e useMultiplayerGame), and any other type of queries/usages.
 
 ### Outputs
 

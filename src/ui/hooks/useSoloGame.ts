@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { CARDS_PER_HAND, HANDS_PER_PLAYER } from "../../engine/constants";
+import { HANDS_PER_PLAYER } from "../../engine/constants";
 import { makeDeck, otherPlayer } from "../../engine/deck";
-import { getLegalHands, isFaceDownPlacement } from "../../engine/placement";
+import { getLegalHands, getReplaceableHands, isFaceDownPlacement } from "../../engine/placement";
 import type { Card, GameEvent, GameState, PlayerId } from "../../engine/types";
 import { playResultSting } from "../sound/gameSounds";
 import { sfx } from "../sound/useSfx";
@@ -120,15 +120,10 @@ export function useSoloGame(opts: SoloGameOptions = {}): SoloGame {
     (state.phase === "placing" || state.phase === "replace");
 
   // Which hands the dragged card may legally land on right now.
-  // Placing: the fill-evenly rule. Replace: any hand whose face-down 5th
-  // card can be swapped (all of them, once placing is done).
   const legalHands = !isHumanTurn
     ? []
     : state.phase === "replace"
-      ? state.hands[HUMAN].flatMap((h, i) => {
-          const fifth = h.cards[CARDS_PER_HAND - 1];
-          return fifth && !fifth.faceUp ? [i] : [];
-        })
+      ? getReplaceableHands(state.hands[HUMAN])
       : getLegalHands(state.hands[HUMAN]);
 
   const canDraw = isHumanTurn && state.pendingCard === null;

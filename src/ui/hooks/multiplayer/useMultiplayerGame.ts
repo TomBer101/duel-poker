@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import type { Database } from "../../../net/firebase";
-import { getLegalHands } from "../../../engine/placement";
+import { getLegalHands, getReplaceableHands } from "../../../engine/placement";
 import type { PlayerId } from "../../../engine/types";
 import { useGameEngine } from "../useGameEngine";
 import { useRevealPacer } from "../useRevealPacer";
@@ -82,7 +82,7 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
 
   useOpeningDeal(ctx);
   useOpponentEvents(ctx);
-  useTurnDraws(ctx);
+  const { canDraw, draw } = useTurnDraws(ctx);
   useRevealPhase(ctx);
   // Local-only and deterministic: each client paces its own reveal from the
   // same REVEAL_FACE_DOWN state; ADVANCE_REVEAL is never published. Held on
@@ -92,25 +92,22 @@ export function useMultiplayerGame(opts: MultiplayerGameOptions): MultiplayerGam
   usePresence(db, roomId, you);
 
   const isHumanTurn = state.turn === you && (state.phase === "placing" || state.phase === "replace");
-  // Replace-phase legality arrives with the replace flow (a later task).
-  const legalHands =
-    isHumanTurn && state.phase === "placing" ? getLegalHands(state.hands[you]) : [];
+  const legalHands = !isHumanTurn
+    ? []
+    : state.phase === "replace"
+      ? getReplaceableHands(state.hands[you])
+      : getLegalHands(state.hands[you]);
 
   return {
     state,
     getEvents,
     you,
     legalHands,
-    // Always false: a multiplayer draw is not a button press. The card only
-    // becomes known once the verified reveal chain resolves it, which happens
-    // automatically at the start of the turn; a "Draw" button would have
-    // nothing to publish.
-    canDraw: false,
+    canDraw,
     isHumanTurn,
     aiThinking: false,
-    // Inert: present only so this satisfies the SoloGame shape.
-    draw: () => {},
-    replaceDraw: () => {},
+    draw,
+    replaceDraw: draw,
     placePending: (handIndex) => placePending(ctx, legalHands, handIndex),
     replace: (handIndex) => replace(ctx, handIndex),
     hasViolation: protocolHandle.violated,

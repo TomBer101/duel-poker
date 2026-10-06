@@ -18,6 +18,14 @@ export function getLegalHands(hands: Hand[]): number[] {
 }
 
 /**
+ * Replace phase: every full hand's face-down 5th card may be swapped, so every
+ * hand holding one is a legal target (the fill-evenly rule no longer applies).
+ */
+export function getReplaceableHands(hands: Hand[]): number[] {
+  return hands.flatMap((h, i) => (h.cards[CARDS_PER_HAND - 1]?.faceUp === false ? [i] : []));
+}
+
+/**
  * Deterministic auto-placement target for a timeout: the lowest-index legal
  * hand. Throws if no hand can accept a card.
  */
