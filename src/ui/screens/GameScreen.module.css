@@ -6,6 +6,13 @@
   min-height: 100svh;
 }
 
+.strikes {
+  display: flex;
+  justify-content: space-between;
+  padding: 1rem;
+  align-items: center;
+}
+
 .secondary {
   font: inherit;
   padding: 0.5rem 0.9rem;

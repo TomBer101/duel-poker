@@ -1,4 +1,5 @@
 import { get, ref, serverTimestamp, set, update, type Database } from "firebase/database";
+import type { PlayerId } from "../engine/types";
 
 const ROOM_ID_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const ROOM_ID_LENGTH = 6;
@@ -22,7 +23,8 @@ export async function hashPassword(password: string, roomId: string): Promise<st
 }
 
 /**
- * Creates a room, seats the creator as p1, and marks them present. `uid` is
+ * Creates a room, seats the creator as p1, marks them present, and announces
+ * them as game 1's dealer (`protocol/dealer`). `uid` is
  * the creator's Firebase Auth uid, stored on the seat so security rules can
  * confirm a write actually comes from the player occupying it. `turn` starts
  * at "p1" (the dealer/creator), matching the reducer's initial state.
@@ -50,6 +52,9 @@ export async function createRoom(
   await update(ref(db, `rooms/${roomId}`), {
     meta: { passwordHash, createdAt: serverTimestamp(), turn: "p1" },
     "presence/p1": true,
+    // Game 1's dealer is the creator. Its rule also reads seats/p1/uid, hence
+    // this second step too.
+    "protocol/dealer": "p1",
   });
 
   return roomId;
@@ -82,4 +87,16 @@ export async function joinRoom(
   // seats/p2/uid back via root, which must already be committed.
   await set(ref(db, `rooms/${roomId}/seats/p2`), { nick, uid });
   await set(ref(db, `rooms/${roomId}/presence/p2`), true);
+}
+
+/**
+ * The seat `uid` occupies in `roomId`, or null when it holds neither (or the
+ * room does not exist). Recovers the seat for a page that lost its session
+ * (new tab, killed PWA) without guessing.
+ */
+export async function findSeat(db: Database, roomId: string, uid: string): Promise<PlayerId | null> {
+  const seats = (await get(ref(db, `rooms/${roomId}/seats`))).val() as Partial<Record<PlayerId, { uid?: string }>> | null;
+  if (seats?.p1?.uid === uid) return "p1";
+  if (seats?.p2?.uid === uid) return "p2";
+  return null;
 }

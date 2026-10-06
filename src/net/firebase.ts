@@ -8,6 +8,9 @@ import {
 } from "firebase/auth";
 import { type Database, connectDatabaseEmulator, getDatabase } from "firebase/database";
 
+/** Re-exported so ui/ names the db handle without importing Firebase itself. */
+export type { Database };
+
 export type FirebaseClient = {
   app: ReturnType<typeof initializeApp>;
   db: Database;

@@ -28,16 +28,21 @@ export function playEventSfx(event: GameEvent): void {
       sfx.play("card-draw");
       break;
     case "END_TURN":
+    case "PLACE_HIDDEN":
     case "REPLACE":
+    case "REPLACE_HIDDEN":
       sfx.play("card-place");
       break;
+    case "REVEAL_FACE_DOWN":
     case "ADVANCE_REVEAL":
       sfx.play("card-flip");
       break;
     case "TIMEOUT":
+    case "TIMEOUT_HIDDEN":
       sfx.play("time-up");
       break;
     case "REMATCH":
+    case "FORFEIT":
       break;
   }
 }

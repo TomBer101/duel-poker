@@ -11,7 +11,7 @@ export const CARDS_PER_HAND = 5;
 export const CARDS_PER_PLAYER = HANDS_PER_PLAYER * CARDS_PER_HAND; // 25
 export const DECK_SIZE = 52;
 
-export const TURN_TIMEOUT_MS = 60_000;
+export const TURN_TIMEOUT_MS = 90_000;
 export const MAX_STRIKES = 3;
 
 /**

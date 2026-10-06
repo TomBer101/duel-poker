@@ -38,6 +38,7 @@ export function useLobby(): UseLobby {
       await setupPresence(client.db, id, "p1");
       setRoomId(id);
       setYou("p1");
+      sessionStorage.setItem("duelPoker-you-" + id, "p1");
     } catch (e) {
       setError(e instanceof Error ? e.message : "failed to create room");
     } finally {
@@ -54,6 +55,7 @@ export function useLobby(): UseLobby {
       await setupPresence(client.db, id, "p2");
       setRoomId(id);
       setYou("p2");
+      sessionStorage.setItem("duelPoker-you-" + id, "p2");
     } catch (e) {
       setError(e instanceof Error ? e.message : "failed to join room");
     } finally {

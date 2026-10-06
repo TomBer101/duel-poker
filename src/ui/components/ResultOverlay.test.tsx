@@ -44,11 +44,28 @@ describe("ResultOverlay", () => {
     expect(screen.getByText("High Card vs High Card")).toBeInTheDocument();
   });
 
+  it("shows a disabled waiting state after the rematch vote, Home stays", () => {
+    renderIn(<ResultOverlay result={result} you="p1" onPlayAgain={vi.fn()} rematchRequested />);
+    expect(screen.getByRole("button", { name: "Waiting for opponent…" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Play again" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Home" })).toBeInTheDocument();
+  });
+
   it("calls onPlayAgain and links home", () => {
     const onPlayAgain = vi.fn();
     renderIn(<ResultOverlay result={result} you="p1" onPlayAgain={onPlayAgain} />);
     screen.getByRole("button", { name: "Play again" }).click();
     expect(onPlayAgain).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("link", { name: "Home" })).toHaveAttribute("href", "/");
+  });
+
+  it("shows the session score only when provided (multiplayer)", () => {
+    const { unmount } = renderIn(
+      <ResultOverlay result={result} you="p1" onPlayAgain={vi.fn()} sessionScore={{ you: 3, opponent: 1 }} />,
+    );
+    expect(screen.getByText("Session: 3 – 1")).toBeInTheDocument();
+    unmount();
+    renderIn(<ResultOverlay result={result} you="p1" onPlayAgain={vi.fn()} />);
+    expect(screen.queryByText(/Session/)).toBeNull();
   });
 });

@@ -16,7 +16,21 @@ export type GameEngine = {
    * A function (not a value) so it never reads a ref during render.
    */
   getEvents: () => readonly GameEvent[];
+  /**
+   * True when an event was dispatched that THIS render's `state` does not
+   * reflect yet (e.g. an earlier effect of the same commit dispatched). An
+   * effect that decides from `state` must then skip: the dispatch always
+   * re-renders, and the effect re-runs on the fresh state. Call it from
+   * effects/handlers only, never during render.
+   */
+  hasPendingDispatch: () => boolean;
 };
+
+type Versioned = { game: GameState; version: number };
+const versionedReducer = (s: Versioned, event: GameEvent): Versioned => ({
+  game: gameReducer(s.game, event),
+  version: s.version + 1,
+});
 
 /**
  * The shared heart of both game modes. `GameState` is derived; the log is the
@@ -25,16 +39,23 @@ export type GameEngine = {
  * opponent's events exactly the same way.
  */
 export function useGameEngine(init: InitOptions): GameEngine {
-  const [state, raw] = useReducer(gameReducer, init, createInitialState);
+  const [{ game: state, version }, raw] = useReducer(versionedReducer, init, (i) => ({
+    game: createInitialState(i),
+    version: 0,
+  }));
   const log = useRef<GameEvent[]>([]);
+  // Dispatches issued; the reducer's `version` counts dispatches applied.
+  const issued = useRef(0);
 
   const dispatch = useCallback((event: GameEvent) => {
+    issued.current += 1;
     log.current.push(event);
     playEventSfx(event);
     raw(event);
   }, []);
 
   const getEvents = useCallback(() => log.current as readonly GameEvent[], []);
+  const hasPendingDispatch = () => issued.current !== version;
 
-  return { state, dispatch, getEvents };
+  return { state, dispatch, getEvents, hasPendingDispatch };
 }

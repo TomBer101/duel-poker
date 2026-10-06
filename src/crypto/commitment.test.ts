@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { commit, generateSalt, generateSeed, verify } from "./commitment";
+import { commit, generateSalt, generateSeed, verify, saltToHex, hexToSalt } from "./commitment";
 
 describe("generateSalt / generateSeed", () => {
   test("generateSalt returns 16 random bytes", () => {
@@ -43,5 +43,17 @@ describe("commit / verify", () => {
   test("commitment is a hex string", async () => {
     const commitment = await commit("Hearts-14", generateSalt());
     expect(commitment).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+describe("saltToHex / hexToSalt", () => {
+  test("round-trips an arbitrary salt", () => {
+    const salt = generateSalt();
+    expect(hexToSalt(saltToHex(salt))).toEqual(salt);
+  });
+
+  test("hex is lowercase, two chars per byte", () => {
+    const salt = new Uint8Array([0, 255, 16]);
+    expect(saltToHex(salt)).toBe("00ff10");
   });
 });
