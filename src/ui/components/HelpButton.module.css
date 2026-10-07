@@ -1,0 +1,18 @@
+.button {
+  position: fixed;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 30;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--felt-raised);
+  color: var(--accent);
+  font-size: 1.1rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.button:hover {
+  border-color: var(--accent);
+}

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useLobby } from "../hooks/useLobby";
 import styles from "./LobbyScreen.module.css";
 
@@ -7,6 +7,8 @@ export function LobbyScreen() {
   const { roomId: roomIdFromRoute } = useParams();
   const navigate = useNavigate();
   const lobby = useLobby();
+  const [searchParams] = useSearchParams();
+  const joining = !!roomIdFromRoute || searchParams.get("mode") === "join";
 
   const [nick, setNick] = useState("");
   const [password, setPassword] = useState("");
@@ -64,28 +66,33 @@ export function LobbyScreen() {
               required
             />
           </label>
-          <label className={styles.field}>
-            Room Code (to join an existing room)
-            <input value={joinCode} onChange={(e) => setJoinCode(e.target.value)} />
-          </label>
+          {joining && (
+            <label className={styles.field}>
+              Room Code
+              <input value={joinCode} onChange={(e) => setJoinCode(e.target.value)} />
+            </label>
+          )}
 
           <div className={styles.actions}>
-            <button
-              type="button"
-              className={styles.primary}
-              disabled={lobby.busy || !nick || !password}
-              onClick={() => lobby.create(nick, password)}
-            >
-              Create Room
-            </button>
-            <button
-              type="button"
-              className={styles.secondary}
-              disabled={lobby.busy || !nick || !password || !joinCode}
-              onClick={() => lobby.join(joinCode.toUpperCase(), nick, password)}
-            >
-              Join Room
-            </button>
+            {joining ? (
+              <button
+                type="button"
+                className={styles.primary}
+                disabled={lobby.busy || !nick || !password || !joinCode}
+                onClick={() => lobby.join(joinCode.toUpperCase(), nick, password)}
+              >
+                Join Room
+              </button>
+            ) : (
+              <button
+                type="button"
+                className={styles.primary}
+                disabled={lobby.busy || !nick || !password}
+                onClick={() => lobby.create(nick, password)}
+              >
+                Create Room
+              </button>
+            )}
           </div>
         </div>
       </div>

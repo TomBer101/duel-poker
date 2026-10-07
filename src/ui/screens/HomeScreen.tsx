@@ -15,7 +15,7 @@ export function HomeScreen() {
           <Link to="/lobby" className={styles.secondary}>
             Create Room
           </Link>
-          <Link to="/lobby" className={styles.secondary}>
+          <Link to="/lobby?mode=join" className={styles.secondary}>
             Join Room
           </Link>
         </div>

@@ -338,9 +338,9 @@ Two players can play a full game: create room, share code, join, draw cards, pla
 
 ---
 
-## Phase 8 — PWA & Deployment
+## Phase 8 — PWA, Vercel Deployment & RTDB Cleanup
 
-**Goal:** installable app, deployed to Firebase Hosting.
+**Goal:** installable app hosted on Vercel, backed by Firebase RTDB/Auth, with finished rooms deleted from the database.
 
 ### Steps
 
@@ -352,26 +352,33 @@ Two players can play a full game: create room, share code, join, draw cards, pla
 
 2. **Create app icons** — 192px and 512px PNG icons for manifest
 
-3. **Firebase Hosting setup**
-   - `firebase init hosting` — set public dir to `dist`, configure SPA rewrites
-   - `firebase.json` includes security rules deployment
+3. **Vercel hosting** (app on Vercel; Firebase stays for RTDB + Anonymous Auth only)
+   - Push the repo to GitHub, then import it in Vercel (Framework preset: Vite; pnpm is detected from `pnpm-lock.yaml`; build `pnpm build`, output `dist`)
+   - Add `vercel.json`: SPA rewrite (`/(.*)` → `/index.html`, so `/room/ABC123` refresh works) and `Cache-Control: no-cache` on `/sw.js` and `/manifest.webmanifest`
+   - Add the seven `VITE_FIREBASE_*` vars (see `src/net/env.ts`) under Project Settings → Environment Variables for Production and Preview. They are inlined at build time, so changing one needs a redeploy. They are public identifiers, not secrets; security comes from the rules
+   - Firebase console: Authentication → Settings → Authorized domains → add the `*.vercel.app` production domain (and any custom domain)
+   - Google Cloud console → API key restrictions: limit the web API key to HTTP referrers = the Vercel domain(s) + `localhost`
+   - Deploy rules from the laptop: `pnpm exec firebase deploy --only database` (`firebase.json` has no hosting block; do not add one). Re-run whenever `database.rules.json` changes
+   - Every push to `main` auto-deploys to production, other branches get preview URLs
 
-4. **Build and deploy**
-   ```bash
-   npm run build
-   firebase deploy
-   ```
+4. **RTDB room cleanup** (a room is deleted when the game is over for good)
+   - **Rules:** add `.write` on `rooms/$roomId` permitting *delete only* (`!newData.exists()`), for a seated player when the other seat is gone: `presence/<other> == false`, or `left/<other> == true`, or the room has no p2. Deeper `.write` rules are untouched because `newData` still exists for them. Add cases to `rules.emulator.test.ts` (seated + other gone = allowed; other still online, non-seated, partial write = denied)
+   - **Explicit leave** (`src/net/room.ts` `leaveRoom(db, roomId, seat)`): sets `left/<seat> = true`; if the other seat is already `left`/offline or was never filled, removes the whole room. Called from the "Leave" button on the result overlay, the lobby, and the protocol-error screen. A room with only p1 (nobody joined) is deleted as soon as p1 leaves
+   - **Strike-out:** when a player reaches 3 strikes the game ends by forfeit. Disable rematch for that room; the surviving player's client deletes the room once they have seen the result and leave. The struck-out player is treated as gone
+   - **Abrupt close** (tab killed, no chance to run `leaveRoom`): `onDisconnect` cannot delete conditionally, so it only flips `presence` to false. Covered by the sweeper below
+   - **Sweeper** (Firebase RTDB has **no native TTL / auto-expiry**; Firestore has TTL policies, RTDB does not; scheduled Cloud Functions need the paid Blaze plan): a Vercel Cron job `api/cleanup.ts` (Node function, `firebase-admin`) runs daily from `vercel.json` `crons`. It deletes any room whose last activity (`max(meta.createdAt, meta.turnStartedAt)`) is older than 24h. Auth: reject requests without `Authorization: Bearer $CRON_SECRET`. Service account JSON goes in a **server-only** env var (`FIREBASE_SERVICE_ACCOUNT`, no `VITE_` prefix; never bundled into the client). Hobby plan allows one cron run per day, which is enough
+   - Keep `firebase-admin` out of the client bundle (it is only imported under `api/`)
+   - Tests: unit test the stale-room selector (pure function over a rooms snapshot); emulator test for `leaveRoom` (first leaver keeps room, second leaver deletes it, lone p1 deletes it)
 
 5. **Test PWA**
    - Install on mobile (Add to Home Screen)
    - Verify standalone mode (no browser bar)
    - Verify app loads from cache on next open
-   - Verify game works end-to-end on deployed version
-
-6. **Push to GitHub** — developer's private account
+   - Verify game works end-to-end on the deployed Vercel URL
+   - Verify rooms disappear in the Firebase console after both players leave, after a 3-strike forfeit, and after the cron run
 
 ### Deliverable
-App deployed at `<project>.web.app`, installable as PWA, playable on mobile and desktop.
+App deployed at `<project>.vercel.app`, installable as PWA, playable on mobile and desktop; room data does not accumulate in RTDB.
 
 ---
 
@@ -406,7 +413,7 @@ Polished, playable game ready to share with friends.
 | 5 | Crypto | 2 | Commit-reveal protocol tested |
 | 6 | Firebase | 1 | Room sync and security rules working |
 | 7 | Multiplayer | 4, 5, 6 | Full multiplayer game working |
-| 8 | PWA + Deploy | 7 | Live, installable app |
+| 8 | PWA + Vercel deploy + RTDB cleanup | 7 | Live, installable app |
 | 9 | Polish | 8 | Production-ready |
 
 **Phases 5 and 6 can be developed in parallel** after Phase 4 is complete.
