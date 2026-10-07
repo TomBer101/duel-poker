@@ -56,7 +56,7 @@ export function HelpDialog({ onClose }: { onClose: () => void }) {
         <footer className={styles.footer}>
           <button
             type="button"
-            className={styles.nav}
+            className={`hidden-mobile ${styles.nav}`}
             disabled={slide === 0}
             onClick={() => goTo(0)}
           >
@@ -69,7 +69,7 @@ export function HelpDialog({ onClose }: { onClose: () => void }) {
           </span>
           <button
             type="button"
-            className={styles.nav}
+            className={`hidden-mobile ${styles.nav}`}
             disabled={slide === SLIDES.length - 1}
             onClick={() => goTo(1)}
           >

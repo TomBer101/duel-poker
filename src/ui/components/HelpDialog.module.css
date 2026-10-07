@@ -130,11 +130,15 @@
   .nav {
     display: none;
   }
+  .footer {
+    justify-content: center;
+  }
 }
 
 .dots {
   display: flex;
   gap: 0.4rem;
+  margin-inline: auto;
 }
 .dot,
 .dotOn {
