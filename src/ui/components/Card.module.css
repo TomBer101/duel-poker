@@ -11,6 +11,9 @@
 .lg {
   --cw: var(--cw-lg);
 }
+.xs {
+  --cw: var(--cw-xs);
+}
 
 .flip {
   position: absolute;

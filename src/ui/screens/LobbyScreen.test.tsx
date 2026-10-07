@@ -46,8 +46,19 @@ describe("LobbyScreen — entry (no room yet)", () => {
     expect(create).toHaveBeenCalledWith("Alice", "hunter2");
   });
 
-  test("submitting the join form calls join() with room id, nick, and password", () => {
+  test("create mode hides the room code field and Join button", () => {
     renderAt("/lobby");
+    expect(screen.queryByLabelText(/room code/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /join room/i })).toBeNull();
+  });
+
+  test("join mode hides the Create button", () => {
+    renderAt("/lobby?mode=join");
+    expect(screen.queryByRole("button", { name: /create room/i })).toBeNull();
+  });
+
+  test("submitting the join form calls join() with room id, nick, and password", () => {
+    renderAt("/lobby?mode=join");
 
     fireEvent.change(screen.getByLabelText(/room code/i), { target: { value: "abc123" } });
     fireEvent.change(screen.getByLabelText(/nickname/i), { target: { value: "Bob" } });

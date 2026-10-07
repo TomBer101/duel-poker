@@ -16,7 +16,7 @@ describe("HomeScreen", () => {
     );
   });
 
-  it("links Create Room and Join Room to /lobby", () => {
+  it("links Create Room to /lobby and Join Room to join mode", () => {
     render(
       <MemoryRouter>
         <HomeScreen />
@@ -28,7 +28,7 @@ describe("HomeScreen", () => {
     );
     expect(screen.getByRole("link", { name: "Join Room" })).toHaveAttribute(
       "href",
-      "/lobby",
+      "/lobby?mode=join",
     );
   });
 });

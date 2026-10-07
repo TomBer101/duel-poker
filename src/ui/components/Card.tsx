@@ -6,7 +6,7 @@ import { cn } from "../cn";
 import { rankLabel, SUIT_META } from "../format";
 import styles from "./Card.module.css";
 
-export type CardSize = "sm" | "md" | "lg";
+export type CardSize = "sm" | "md" | "lg" | "xs";
 
 /** Touch-and-hold duration before an `interactive` card enlarges. */
 const LONG_PRESS_MS = 2000;
@@ -83,6 +83,7 @@ export function Card({
         styles.card,
         size === "sm" && styles.sm,
         size === "lg" && styles.lg,
+        size === "xs" && styles.xs,
         interactive && styles.interactive,
         pressed && styles.pressed,
         className,
