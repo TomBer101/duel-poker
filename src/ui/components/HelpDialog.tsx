@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Card } from "./Card";
 import { HAND_EXAMPLES } from "./helpExamples";
 import styles from "./HelpDialog.module.css";
@@ -7,6 +7,18 @@ const SLIDES = ["Game rules", "Hand ranking"] as const;
 
 export function HelpDialog({ onClose }: { onClose: () => void }) {
   const [slide, setSlide] = useState(0);
+  const track = useRef<HTMLDivElement>(null);
+
+  // Swiping scrolls the snap track natively; mirror the position into `slide`.
+  function onScroll() {
+    const el = track.current;
+    if (el) setSlide(Math.round(el.scrollLeft / el.clientWidth));
+  }
+  function goTo(i: number) {
+    setSlide(i);
+    const el = track.current;
+    el?.scrollTo?.({ left: i * el.clientWidth, behavior: "smooth" });
+  }
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -32,14 +44,21 @@ export function HelpDialog({ onClose }: { onClose: () => void }) {
           </button>
         </header>
 
-        <div className={styles.body}>{slide === 0 ? <Rules /> : <Ranking />}</div>
+        <div ref={track} className={styles.track} onScroll={onScroll}>
+          <section className={styles.slide} aria-label={SLIDES[0]}>
+            <Rules />
+          </section>
+          <section className={styles.slide} aria-label={SLIDES[1]}>
+            <Ranking />
+          </section>
+        </div>
 
         <footer className={styles.footer}>
           <button
             type="button"
-            className={styles.nav}
+            className={`hidden-mobile ${styles.nav}`}
             disabled={slide === 0}
-            onClick={() => setSlide(0)}
+            onClick={() => goTo(0)}
           >
             ← Back
           </button>
@@ -50,9 +69,9 @@ export function HelpDialog({ onClose }: { onClose: () => void }) {
           </span>
           <button
             type="button"
-            className={styles.nav}
+            className={`hidden-mobile ${styles.nav}`}
             disabled={slide === SLIDES.length - 1}
-            onClick={() => setSlide(1)}
+            onClick={() => goTo(1)}
           >
             Next →
           </button>
