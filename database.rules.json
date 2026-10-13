@@ -2,6 +2,7 @@
   "rules": {
     "rooms": {
       "$roomId": {
+        ".write": "auth != null && !newData.exists() && ((data.child('seats/p1/uid').val() == auth.uid && (!data.child('seats/p2').exists() || data.child('presence/p2').val() == false || data.child('left/p2').val() == true)) || (data.child('seats/p2/uid').val() == auth.uid && (data.child('presence/p1').val() == false || data.child('left/p1').val() == true)))",
         "seats": {
           "p1": {
             ".write": "auth != null && !data.exists()",
@@ -39,6 +40,19 @@
           },
           "p2": {
             ".write": "auth != null && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid"
+          }
+        },
+        "left": {
+          "p1": {
+            ".write": "auth != null && root.child('rooms').child($roomId).child('seats/p1/uid').val() == auth.uid",
+            ".validate": "newData.val() == true"
+          },
+          "p2": {
+            ".write": "auth != null && root.child('rooms').child($roomId).child('seats/p2/uid').val() == auth.uid",
+            ".validate": "newData.val() == true"
+          },
+          "$other": {
+            ".validate": false
           }
         },
         "protocol": {
