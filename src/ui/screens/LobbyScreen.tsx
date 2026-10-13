@@ -28,14 +28,26 @@ export function LobbyScreen() {
             {lobby.opponentPresent ? "Opponent has joined!" : "Waiting for opponent…"}
           </p>
 
-          <button
-            type="button"
-            className={styles.primary}
-            disabled={!lobby.opponentPresent}
-            onClick={() => navigate(`/room/${lobby.roomId}`)}
-          >
-            Start Game
-          </button>
+          <div className={styles.actions}>
+            <button
+              type="button"
+              className={styles.primary}
+              disabled={!lobby.opponentPresent}
+              onClick={() => navigate(`/room/${lobby.roomId}`)}
+            >
+              Start Game
+            </button>
+            <button
+              type="button"
+              className={styles.secondary}
+              onClick={() => {
+                void lobby.leave();
+                navigate("/");
+              }}
+            >
+              Leave
+            </button>
+          </div>
         </div>
       </div>
     );

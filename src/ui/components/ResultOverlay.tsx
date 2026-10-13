@@ -13,6 +13,8 @@ export type ResultOverlayProps = {
   rematchRequested?: boolean;
   /** Multiplayer only: running room totals; solo passes nothing. */
   sessionScore?: { you: number; opponent: number };
+  /** Multiplayer only: runs as the player heads home (leaves the room). */
+  onLeave?: () => void;
 };
 
 type Outcome = "win" | "lose" | "tie";
@@ -31,7 +33,7 @@ function titleFor(outcome: Outcome): string {
  * next. Rendered once `state.phase === "result"` — the reveal sequence that
  * led up to it lives in {@link RevealSequence}, inside the board itself.
  */
-export function ResultOverlay({ result, you, onPlayAgain, rematchRequested = false, sessionScore }: ResultOverlayProps) {
+export function ResultOverlay({ result, you, onPlayAgain, rematchRequested = false, sessionScore, onLeave }: ResultOverlayProps) {
   const opponent = otherPlayer(you);
   const yourWins = you === "p1" ? result.wins.p1 : result.wins.p2;
   const opponentWins = opponent === "p1" ? result.wins.p1 : result.wins.p2;
@@ -72,7 +74,7 @@ export function ResultOverlay({ result, you, onPlayAgain, rematchRequested = fal
         <button className={styles.primary} onClick={onPlayAgain} disabled={rematchRequested}>
           {rematchRequested ? "Waiting for opponent…" : "Play again"}
         </button>
-        <Link to="/" className={styles.secondary}>
+        <Link to="/" className={styles.secondary} onClick={onLeave}>
           Home
         </Link>
       </div>

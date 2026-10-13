@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useFirebaseClient } from "../../app/firebaseContext";
-import { createRoom, joinRoom } from "../../net/room";
+import { createRoom, joinRoom, leaveRoom } from "../../net/room";
 import { setupPresence, subscribeToPresence } from "../../net/sync";
 import { otherPlayer } from "../../engine/deck";
 import type { PlayerId } from "../../engine/types";
@@ -13,6 +13,8 @@ export type UseLobby = {
   busy: boolean;
   create: (nick: string, password: string) => Promise<void>;
   join: (roomId: string, nick: string, password: string) => Promise<void>;
+  /** Leaves the room being waited in (deletes it if nobody else is there). */
+  leave: () => Promise<void>;
 };
 
 /** Room creation/joining and opponent-presence tracking for the lobby screen. */
@@ -63,8 +65,17 @@ export function useLobby(): UseLobby {
     }
   }
 
+  async function leave() {
+    if (!roomId || !you) return;
+    try {
+      await leaveRoom(client.db, roomId, you);
+    } catch (e) {
+      console.error("[useLobby] leave failed", e);
+    }
+  }
+
   const opponent = you ? otherPlayer(you) : null;
   const opponentPresent = opponent ? presence[opponent] === true : false;
 
-  return { roomId, you, opponentPresent, error, busy, create, join };
+  return { roomId, you, opponentPresent, error, busy, create, join, leave };
 }
