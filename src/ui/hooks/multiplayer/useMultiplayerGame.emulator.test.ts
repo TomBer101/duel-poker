@@ -80,16 +80,30 @@ const dummyConfig = {
   appId: "1:0:web:0",
 };
 
-/** Drives `count` alternating placing turns (p1 first), each client placing
- *  its resolved card on its first legal hand. Shared by the timeout tests
- *  that need to reach a specific turn (e.g. turn 30 = p1's first face-down
- *  turn) without repeating the wait/act boilerplate. */
-async function drivePlacingTurns(
-  clients: Record<PlayerId, { result: { current: ReturnType<typeof useMultiplayerGame> } }>,
-  count: number,
-): Promise<void> {
+type GameHook = { result: { current: ReturnType<typeof useMultiplayerGame> } };
+
+/** My own draw (placing or replace) waits for a click (useTurnDraws): wait
+ *  until it is drawable, then click the pile. The opponent's draw needs no
+ *  click — it applies automatically on both clients. */
+async function drawMine(c: GameHook, timeout = 8000): Promise<void> {
+  await waitFor(() => expect(c.result.current.canDraw).toBe(true), { timeout });
+  await act(async () => {
+    c.result.current.draw();
+  });
+}
+
+/** Draws used up by placed cards: the next turn's card may already be pending
+ *  on the opponent (auto-drawn) but not on the player (waits for a click). */
+const drawsConsumed = (s: ReturnType<typeof useMultiplayerGame>["state"]) => s.drawCount - (s.pendingCard ? 1 : 0);
+
+/** Drives `count` alternating placing turns (p1 first), each client drawing
+ *  and placing its card on its first legal hand. Shared by the tests that
+ *  need to reach a specific turn (e.g. turn 30 = p1's first face-down turn)
+ *  without repeating the wait/act boilerplate. */
+async function drivePlacingTurns(clients: Record<PlayerId, GameHook>, count: number): Promise<void> {
   for (let turn = 0; turn < count; turn++) {
     const active = clients[turn % 2 === 0 ? "p1" : "p2"];
+    await drawMine(active);
     await waitFor(
       () => {
         expect(active.result.current.state.pendingCard).not.toBeNull();
@@ -277,21 +291,7 @@ describe("useMultiplayerGame - placing phase", () => {
 
     await waitFor(() => expect(p1.result.current.state.phase).toBe("placing"), { timeout: 5000 });
 
-    // 40 placing turns. canDraw is always false in multiplayer: wait for the
-    // active client's pendingCard (resolved via the reveal chain) and place it.
-    for (let turn = 0; turn < 40; turn++) {
-      const active = clients[turn % 2 === 0 ? "p1" : "p2"];
-      await waitFor(
-        () => {
-          expect(active.result.current.state.pendingCard).not.toBeNull();
-          expect(active.result.current.legalHands.length).toBeGreaterThan(0);
-        },
-        { timeout: 8000 },
-      );
-      await act(async () => {
-        await active.result.current.placePending(active.result.current.legalHands[0]);
-      });
-    }
+    await drivePlacingTurns(clients, 40);
 
     await waitFor(
       () => {
@@ -304,6 +304,7 @@ describe("useMultiplayerGame - placing phase", () => {
     // The dealer (p1) resolves its own secret replace draw (index 50) locally,
     // the selector never sees that card, so drawCounts legitimately differ by
     // one here (dealer 51 with a pending card, selector 50).
+    await drawMine(p1);
     await waitFor(() => expect(p1.result.current.state.pendingCard).not.toBeNull(), { timeout: 5000 });
     const a = p1.result.current.state; // dealer's view
     const b = p2.result.current.state; // selector's view
@@ -338,6 +339,7 @@ describe("useMultiplayerGame - publish-then-apply", () => {
     await dealtBy("p1");
     const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
     const p2 = renderHook(() => useMultiplayerGame({ db: db2, roomId, you: "p2", gameNumber: 1 }));
+    await drawMine(p1);
     await waitFor(
       () => {
         expect(p1.result.current.state.pendingCard).not.toBeNull();
@@ -381,6 +383,7 @@ describe("useMultiplayerGame - seq-ordered log", () => {
     await dealtBy("p1");
     const p1 = renderHook(() => useMultiplayerGame({ db, roomId, you: "p1", gameNumber: 1 }));
     const p2 = renderHook(() => useMultiplayerGame({ db: db2, roomId, you: "p2", gameNumber: 1 }));
+    await drawMine(p1);
     await waitFor(
       () => {
         expect(p1.result.current.state.pendingCard).not.toBeNull();
@@ -417,19 +420,7 @@ describe("useMultiplayerGame - replace and reveal phases", () => {
     const p2 = renderHook(() => useMultiplayerGame({ db: db2, roomId, you: "p2", gameNumber: 1 }));
     const clients = { p1, p2 };
     await waitFor(() => expect(p1.result.current.state.phase).toBe("placing"), { timeout: 5000 });
-    for (let turn = 0; turn < 40; turn++) {
-      const active = clients[turn % 2 === 0 ? "p1" : "p2"];
-      await waitFor(
-        () => {
-          expect(active.result.current.state.pendingCard).not.toBeNull();
-          expect(active.result.current.legalHands.length).toBeGreaterThan(0);
-        },
-        { timeout: 8000 },
-      );
-      await act(async () => {
-        await active.result.current.placePending(active.result.current.legalHands[0]);
-      });
-    }
+    await drivePlacingTurns(clients, 40);
     await waitFor(
       () => {
         expect(p1.result.current.state.phase).toBe("replace");
@@ -455,6 +446,7 @@ describe("useMultiplayerGame - replace and reveal phases", () => {
         { timeout: 8000 },
       );
       // The dealer's own draw resolves from its own deck; the selector's via reveals.
+      await drawMine(c);
       await waitFor(() => expect(c.result.current.state.pendingCard).not.toBeNull(), { timeout: 8000 });
       const swap = who === dealer ? dealerSwap : selectorSwap;
       await act(async () => {
@@ -553,6 +545,7 @@ describe("useMultiplayerGame - replace and reveal phases", () => {
           commitment: "forged-commitment",
         });
       }
+      await drawMine(clients[who]);
       await waitFor(() => expect(clients[who].result.current.state.pendingCard).not.toBeNull(), { timeout: 8000 });
       await act(async () => {
         await clients[who].result.current.replace(null);
@@ -580,6 +573,7 @@ describe("useMultiplayerGame - replace and reveal phases", () => {
     const dealer: PlayerId = "p1";
     const clients = await playToReplace(dealer);
     for (const who of ["p1", "p2"] as const) {
+      await drawMine(clients[who]);
       await waitFor(() => expect(clients[who].result.current.state.pendingCard).not.toBeNull(), { timeout: 8000 });
       await act(async () => {
         await clients[who].result.current.replace(null);
@@ -614,6 +608,7 @@ describe("useMultiplayerGame - timeout", () => {
     await waitFor(() => expect(p1.result.current.state.phase).toBe("placing"), { timeout: 5000 });
 
     // p1's (the dealer's) first turn: a normal, non-face-down placement.
+    await drawMine(p1);
     await waitFor(
       () => {
         expect(p1.result.current.state.pendingCard).not.toBeNull();
@@ -633,13 +628,14 @@ await act(async () => {
       await p1.result.current.placePending(p1.result.current.legalHands[0]);
     });
 
-    // p2's turn now; wait for its card to resolve on both clients (both
-    // learn every non-face-down card the same way as a normal draw).
+    // p2's turn now and p2 never clicks the pile: its card resolves on p1
+    // (the opponent's draw applies automatically) while p2 sits undrawn.
     await waitFor(
       () => {
         expect(p1.result.current.state.turn).toBe("p2");
         expect(p1.result.current.state.pendingCard).not.toBeNull();
-        expect(p2.result.current.state.pendingCard).not.toBeNull();
+        expect(p2.result.current.canDraw).toBe(true);
+        expect(p2.result.current.state.pendingCard).toBeNull();
       },
       { timeout: 5000 },
     );
@@ -673,19 +669,7 @@ await act(async () => {
 
     // Drive 30 normal placing turns (p1's own turns 0..14) to reach p1's
     // (the dealer's) first face-down turn (its own turn 15, overall turn 30).
-    for (let turn = 0; turn < 30; turn++) {
-      const active = clients[turn % 2 === 0 ? "p1" : "p2"];
-      await waitFor(
-        () => {
-          expect(active.result.current.state.pendingCard).not.toBeNull();
-          expect(active.result.current.legalHands.length).toBeGreaterThan(0);
-        },
-        { timeout: 8000 },
-      );
-      await act(async () => {
-        await active.result.current.placePending(active.result.current.legalHands[0]);
-      });
-    }
+    await drivePlacingTurns(clients, 30);
 
     await waitFor(
       () => {
@@ -697,6 +681,7 @@ await act(async () => {
     );
     // The dealer resolves its own secret draw from its own deck; the
     // selector never does — this is exactly the hidden case.
+    await drawMine(p1);
     await waitFor(() => expect(p1.result.current.state.pendingCard).not.toBeNull(), { timeout: 8000 });
     expect(p2.result.current.state.pendingCard).toBeNull();
 
@@ -728,7 +713,7 @@ await act(async () => {
     expect(dealerView[4].card).toBeDefined();
     expect(selectorView[4].card).toBeUndefined();
 
-    expect(p1.result.current.state.drawCount).toBe(p2.result.current.state.drawCount);
+    expect(drawsConsumed(p1.result.current.state)).toBe(drawsConsumed(p2.result.current.state));
     expect(p1.result.current.hasViolation).toBe(false);
     expect(p2.result.current.hasViolation).toBe(false);
   }, 60000);
@@ -783,7 +768,7 @@ await act(async () => {
     expect(dealerView[4].faceUp).toBe(false);
     expect(selectorView[4].card).toBeUndefined();
     expect(selectorView[4].faceUp).toBe(false);
-    expect(p1.result.current.state.drawCount).toBe(p2.result.current.state.drawCount);
+    expect(drawsConsumed(p1.result.current.state)).toBe(drawsConsumed(p2.result.current.state));
     expect(p1.result.current.hasViolation).toBe(false);
     expect(p2.result.current.hasViolation).toBe(false);
   }, 20000);
@@ -835,7 +820,7 @@ await act(async () => {
     expect(dealerView[4].faceUp).toBe(false);
     expect(selectorView[4].card).toBeUndefined();
     expect(selectorView[4].faceUp).toBe(false);
-    expect(p1.result.current.state.drawCount).toBe(p2.result.current.state.drawCount);
+    expect(drawsConsumed(p1.result.current.state)).toBe(drawsConsumed(p2.result.current.state));
     expect(p1.result.current.hasViolation).toBe(false);
     expect(p2.result.current.hasViolation).toBe(false);
   }, 20000);
@@ -853,6 +838,7 @@ await act(async () => {
 
     const p2 = renderHook(() => useMultiplayerGame({ db: db2, roomId, you: "p2", gameNumber: 1 }));
     await waitFor(() => expect(p1.result.current.state.phase).toBe("placing"), { timeout: 5000 });
+    await drawMine(p1, 5000);
     await waitFor(() => expect(p1.result.current.state.pendingCard).not.toBeNull(), { timeout: 5000 });
 
     // p1 is dealer and it's p1's own turn: it must never self-report.
@@ -1156,6 +1142,7 @@ describe("useMultiplayerGame - catch-up from the logs (simulated refresh)", () =
 
     // Turn 30: the dealer's first hidden turn times out (TIMEOUT_HIDDEN by
     // p2, translated by p1); turn 31: p2's turn times out (TIMEOUT by p1).
+    await drawMine(p1);
     await waitFor(() => expect(p1.result.current.state.pendingCard).not.toBeNull(), { timeout: 8000 });
     await waitFor(() => expect(p2.result.current.state.turn).toBe("p1"), { timeout: 8000 });
     await act(async () => {
@@ -1190,6 +1177,7 @@ describe("useMultiplayerGame - catch-up from the logs (simulated refresh)", () =
     let late2: typeof late | null = null;
     for (const [who, swap] of [["p1", 0], ["p2", null]] as const) {
       const c = clients[who];
+      await drawMine(c);
       await waitFor(
         () => {
           expect(c.result.current.state.turn).toBe(who);
@@ -1273,6 +1261,7 @@ describe("useMultiplayerGame - refresh (real rules, two clients, no stubs)", () 
   async function finishReplace(clients: Record<PlayerId, Instance>, swaps: Record<PlayerId, number | null>) {
     for (const who of ["p1", "p2"] as const) {
       const c = clients[who];
+      await drawMine(c);
       await waitFor(
         () => {
           expect(c.result.current.state.phase).toBe("replace");
@@ -1310,7 +1299,8 @@ describe("useMultiplayerGame - refresh (real rules, two clients, no stubs)", () 
     const stamp = async () => (await get(ref(db, `rooms/${roomId}/meta/turnStartedAt`))).val() as number | null;
     await waitFor(async () => expect(await stamp()).not.toBeNull(), { timeout: 5000 }); // the DEAL stamped it
     await drivePlacingTurns(clients, 2);
-    await waitFor(() => expect(clients.p1.result.current.state.pendingCard).not.toBeNull(), { timeout: 8000 });
+    // Undrawn: a click-draw is local only, so a refresh would drop it.
+    await waitFor(() => expect(clients.p1.result.current.canDraw).toBe(true), { timeout: 8000 });
     await settle();
     const before = await stamp();
 
@@ -1326,7 +1316,8 @@ describe("useMultiplayerGame - refresh (real rules, two clients, no stubs)", () 
     // 32 turns: turn 31 is the dealer's first hidden placement (draw 41), so
     // p1's view now holds a card-less face-down slot in p2's hand.
     await drivePlacingTurns(clients, 32);
-    await waitFor(() => expect(clients.p1.result.current.state.pendingCard).not.toBeNull(), { timeout: 8000 });
+    // Undrawn: a click-draw is local only, so a refresh would drop it.
+    await waitFor(() => expect(clients.p1.result.current.canDraw).toBe(true), { timeout: 8000 });
     const p2Hands = clients.p1.result.current.state.hands.p2;
     expect(p2Hands.some((h) => h.cards[4]?.faceUp === false && h.cards[4].card === undefined)).toBe(true);
     const mineBefore = await ownReveals("p1");
@@ -1366,6 +1357,7 @@ describe("useMultiplayerGame - refresh (real rules, two clients, no stubs)", () 
     const { clients, gameNumber } = await startGame("p1"); // p1 deals, p2 selects
     await drivePlacingTurns(clients, 40);
     // The dealer swaps into a hidden slot; then it is the selector's turn.
+    await drawMine(clients.p1);
     await waitFor(() => expect(clients.p1.result.current.state.pendingCard).not.toBeNull(), { timeout: 8000 });
     await act(async () => {
       await clients.p1.result.current.replace(2);
@@ -1373,7 +1365,8 @@ describe("useMultiplayerGame - refresh (real rules, two clients, no stubs)", () 
     await waitFor(
       () => {
         expect(clients.p2.result.current.state.turn).toBe("p2");
-        expect(clients.p2.result.current.state.pendingCard).not.toBeNull();
+        // Undrawn: a click-draw is local only, so a refresh would drop it.
+        expect(clients.p2.result.current.canDraw).toBe(true);
       },
       { timeout: 8000 },
     );
@@ -1383,6 +1376,8 @@ describe("useMultiplayerGame - refresh (real rules, two clients, no stubs)", () 
     await settle();
     expect(await ownReveals("p2")).toEqual(mineBefore);
 
+    await drawMine(clients.p2);
+    await waitFor(() => expect(clients.p2.result.current.state.pendingCard).not.toBeNull(), { timeout: 8000 });
     await act(async () => {
       await clients.p2.result.current.replace(null);
     });
