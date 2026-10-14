@@ -21,7 +21,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "jsdom",
-    include: ["src/**/*.test.{ts,tsx}"],
+    include: ["src/**/*.test.{ts,tsx}", "api/**/*.test.ts"],
     // Emulator-backed net/ tests need a running Firebase emulator (see
     // vitest.emulator.config.ts / `pnpm test:emulator`) and are excluded here
     // so plain `pnpm test` never fails for lack of one.

@@ -5,6 +5,7 @@ import { LobbyScreen } from "./LobbyScreen";
 
 const create = vi.fn();
 const join = vi.fn();
+const leave = vi.fn();
 let lobbyState: ReturnType<typeof baseLobbyState>;
 
 function baseLobbyState() {
@@ -16,6 +17,7 @@ function baseLobbyState() {
     busy: false,
     create,
     join,
+    leave,
   };
 }
 
@@ -138,5 +140,24 @@ describe("LobbyScreen — waiting room (room joined/created)", () => {
     );
 
     expect(screen.getByRole("button", { name: /start game/i })).toBeEnabled();
+  });
+
+  test("Leave calls leave() and goes home", () => {
+    lobbyState = baseLobbyState();
+    lobbyState.roomId = "K3F9QZ";
+    lobbyState.you = "p1";
+
+    render(
+      <MemoryRouter initialEntries={["/lobby"]}>
+        <Routes>
+          <Route path="/lobby" element={<LobbyScreen />} />
+          <Route path="/" element={<p>home</p>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /leave/i }));
+
+    expect(leave).toHaveBeenCalled();
+    expect(screen.getByText("home")).toBeInTheDocument();
   });
 });

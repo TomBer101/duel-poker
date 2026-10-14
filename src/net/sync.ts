@@ -1,5 +1,7 @@
 import {
   get,
+  goOffline,
+  goOnline,
   onChildAdded,
   onDisconnect,
   onValue,
@@ -96,6 +98,38 @@ export async function setupPresence(
  */
 export function subscribeToConnection(db: Database, callback: (connected: boolean) => void): () => void {
   return onValue(ref(db, ".info/connected"), (snapshot) => callback(snapshot.val() === true));
+}
+
+/** Opens this client's RTDB socket (takes one of the plan's connection slots). */
+export function connect(db: Database): void {
+  goOnline(db);
+}
+
+/** Closes this client's RTDB socket, releasing its connection slot. */
+export function disconnect(db: Database): void {
+  goOffline(db);
+}
+
+/**
+ * Resolves true as soon as `subscribe` reports connected, false after
+ * `timeoutMs` (over the plan's connection limit `.info/connected` never turns
+ * true; also covers being offline). Always unsubscribes.
+ */
+export function waitForConnection(
+  subscribe: (callback: (connected: boolean) => void) => () => void,
+  timeoutMs: number,
+): Promise<boolean> {
+  let unsubscribe = () => {};
+  const result = new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    unsubscribe = subscribe((connected) => {
+      if (!connected) return;
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+  // Runs after `subscribe` has returned, even if it reported synchronously.
+  return result.finally(() => unsubscribe());
 }
 
 /** Fires `callback` with the room's full presence map whenever it changes. */
