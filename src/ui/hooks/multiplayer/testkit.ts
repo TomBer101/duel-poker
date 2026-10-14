@@ -3,6 +3,7 @@ import { createInitialState, gameReducer } from "../../../engine/reducer";
 import { getLegalHands, isFaceDownPlacement } from "../../../engine/placement";
 import { orderedDeck } from "../../../engine/testkit";
 import type { GameEvent, GameState, PlayerId } from "../../../engine/types";
+import { createProtocolState } from "../../../crypto/protocolController";
 import type { MultiplayerCtx } from "./context";
 
 // Test-only helpers for the multiplayer hook modules' unit tests: engine
@@ -42,6 +43,7 @@ export function fakeCtx(state: GameState, you: PlayerId, role: "dealer" | "selec
     db: {},
     roomId: "room",
     dealerState: { current: { seed: new Uint8Array(16) } },
+    protocol: { current: createProtocolState() },
     you,
     role,
     state,
