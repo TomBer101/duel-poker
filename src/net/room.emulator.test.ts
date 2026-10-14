@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from "vitest";
-import { get, ref, type Database } from "firebase/database";
+import { get, ref, set, type Database } from "firebase/database";
 import { connectToEmulators, createFirebaseClient, signInAnonymous } from "./firebase";
-import { createRoom, findSeat, joinRoom } from "./room";
+import { createRoom, findSeat, joinRoom, leaveRoom } from "./room";
 
 const dummyConfig = {
   apiKey: "test-api-key",
@@ -86,5 +86,43 @@ describe("findSeat", () => {
     expect(await findSeat(db, roomId, "bob-uid")).toBe("p2");
     expect(await findSeat(db, roomId, "carol-uid")).toBeNull();
     expect(await findSeat(db, "NOROOM", uid)).toBeNull();
+  });
+});
+
+describe("leaveRoom", () => {
+  const roomExists = async (roomId: string) => (await get(ref(db, `rooms/${roomId}`))).exists();
+
+  test("a lone p1 leaving deletes the room", async () => {
+    const roomId = await createRoom(db, uid, "Alice", "hunter2");
+
+    await leaveRoom(db, roomId, "p1");
+
+    expect(await roomExists(roomId)).toBe(false);
+  });
+
+  test("the first leaver only flags the seat; the second leaver deletes the room", async () => {
+    const roomId = await createRoom(db, uid, "Alice", "hunter2");
+    await joinRoom(db, "bob-uid", roomId, "Bob", "hunter2");
+
+    await leaveRoom(db, roomId, "p2");
+    expect((await get(ref(db, `rooms/${roomId}/left`))).val()).toEqual({ p2: true });
+    expect((await get(ref(db, `rooms/${roomId}/presence/p2`))).val()).toBe(false);
+
+    await leaveRoom(db, roomId, "p1");
+    expect(await roomExists(roomId)).toBe(false);
+  });
+
+  test("leaving after the other player went offline deletes the room", async () => {
+    const roomId = await createRoom(db, uid, "Alice", "hunter2");
+    await joinRoom(db, "bob-uid", roomId, "Bob", "hunter2");
+    await set(ref(db, `rooms/${roomId}/presence/p2`), false);
+
+    await leaveRoom(db, roomId, "p1");
+
+    expect(await roomExists(roomId)).toBe(false);
+  });
+
+  test("leaving a room that is already gone is a no-op", async () => {
+    await expect(leaveRoom(db, "NOROOM", "p1")).resolves.toBeUndefined();
   });
 });

@@ -368,14 +368,23 @@ Two players can play a full game: create room, share code, join, draw cards, pla
    - **Abrupt close** (tab killed, no chance to run `leaveRoom`): `onDisconnect` cannot delete conditionally, so it only flips `presence` to false. Covered by the sweeper below
    - **Sweeper** (Firebase RTDB has **no native TTL / auto-expiry**; Firestore has TTL policies, RTDB does not; scheduled Cloud Functions need the paid Blaze plan): a Vercel Cron job `api/cleanup.ts` (Node function, `firebase-admin`) runs daily from `vercel.json` `crons`. It deletes any room whose last activity (`max(meta.createdAt, meta.turnStartedAt)`) is older than 24h. Auth: reject requests without `Authorization: Bearer $CRON_SECRET`. Service account JSON goes in a **server-only** env var (`FIREBASE_SERVICE_ACCOUNT`, no `VITE_` prefix; never bundled into the client). Hobby plan allows one cron run per day, which is enough
    - Keep `firebase-admin` out of the client bundle (it is only imported under `api/`)
+   - **Service account key:** the same env var name everywhere, holding the whole JSON as a string. Vercel: `FIREBASE_SERVICE_ACCOUNT` (Sensitive, Production only) + `CRON_SECRET`. Locally: `.env.local` (gitignored), the JSON minified onto one line and wrapped in single quotes, e.g. `FIREBASE_SERVICE_ACCOUNT='{"type":"service_account",...}'`. Keep the `\n` sequences inside `private_key` as-is. Code: `cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT!))`. Run locally with `vercel dev`; prefer pointing it at the emulator. The key file itself stays outside the repo
    - Tests: unit test the stale-room selector (pure function over a rooms snapshot); emulator test for `leaveRoom` (first leaver keeps room, second leaver deletes it, lone p1 deletes it)
 
-5. **Test PWA**
+5. **Capacity: "all tables are occupied"** (Spark plan: 100 simultaneous connections, 1 GB stored, 10 GB/month downloaded. A room is ~25–30 KB, so with cleanup working storage is never the limit; **connections are**, about 50 live games)
+   - A connection = one open tab/app whose RTDB websocket is open, not one room. `getDatabase` is lazy, so solo play and the home screen cost nothing until the first room read/write. After that the socket stays open until the tab closes, even back on the home screen
+   - **Release the slot:** call `goOffline(db)` after `leaveRoom` (back to home), `goOnline(db)` before create/join. Not on `visibilitychange`: a hidden mid-game tab must keep presence and the turn timer honest
+   - **Dead connections** (network drop, phone killed): the server keeps the slot until its socket times out (roughly a minute), then fires `onDisconnect`. Nothing to build; it self-heals
+   - **Full message:** before create/join, wait up to ~5s for `.info/connected` (`subscribeToConnection`) to report `true`. If it doesn't, show "All tables are occupied right now — try again in a few minutes" and send no writes. Also covers being offline. No client-side room counting: clients cannot read `rooms/` (correct), and a client-maintained counter can be forged or drift
+   - Test: unit test the connect-with-timeout helper (resolves on `true`, rejects after the timeout)
+
+6. **Test PWA**
    - Install on mobile (Add to Home Screen)
    - Verify standalone mode (no browser bar)
    - Verify app loads from cache on next open
    - Verify game works end-to-end on the deployed Vercel URL
    - Verify rooms disappear in the Firebase console after both players leave, after a 3-strike forfeit, and after the cron run
+   - Verify the "tables occupied" message by blocking the network (DevTools offline) before Create/Join
 
 ### Deliverable
 App deployed at `<project>.vercel.app`, installable as PWA, playable on mobile and desktop; room data does not accumulate in RTDB.

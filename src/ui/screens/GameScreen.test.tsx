@@ -74,7 +74,11 @@ vi.mock("../../app/firebaseContext", () => ({
 // Firebase RTDB, which the fake `db: {}` above can't back. `vi.fn` (not a
 // plain arrow) so the single call's args can be inspected below.
 // No real Firebase presence listener under the fake `db: {}`.
-vi.mock("../../net/sync", () => ({ subscribeToPresence: vi.fn(() => () => {}) }));
+vi.mock("../../net/sync", () => ({
+  subscribeToPresence: vi.fn(() => () => {}),
+  connect: vi.fn(),
+  disconnect: vi.fn(),
+}));
 
 // Props-capturing stub: these tests are about the wiring, not the countdown.
 vi.mock("../components/DisconnectOverlay", () => ({ DisconnectOverlay: vi.fn(() => null) }));

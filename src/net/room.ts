@@ -1,4 +1,5 @@
-import { get, ref, serverTimestamp, set, update, type Database } from "firebase/database";
+import { get, ref, remove, serverTimestamp, set, update, type Database } from "firebase/database";
+import { otherPlayer } from "../engine/deck";
 import type { PlayerId } from "../engine/types";
 
 const ROOM_ID_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -99,4 +100,28 @@ export async function findSeat(db: Database, roomId: string, uid: string): Promi
   if (seats?.p1?.uid === uid) return "p1";
   if (seats?.p2?.uid === uid) return "p2";
   return null;
+}
+
+type LeaveView = {
+  seats?: Partial<Record<PlayerId, unknown>>;
+  presence?: Partial<Record<PlayerId, boolean>>;
+  left?: Partial<Record<PlayerId, boolean>>;
+};
+
+/**
+ * `seat` leaves `roomId` for good. The last one out deletes the room: if the
+ * other seat already left, is offline, or was never filled, the whole room is
+ * removed; otherwise `left/<seat>` is flagged (and presence cleared) so the other player's leave
+ * deletes it. Mirrors the delete rule on `rooms/$roomId`.
+ */
+export async function leaveRoom(db: Database, roomId: string, seat: PlayerId): Promise<void> {
+  const room = (await get(ref(db, `rooms/${roomId}`))).val() as LeaveView | null;
+  if (room === null) return;
+  const other = otherPlayer(seat);
+  const otherGone = room.seats?.[other] === undefined || room.presence?.[other] === false || room.left?.[other] === true;
+  // ponytail: both leaving at the same instant each see the other present and
+  // only flag; the daily sweeper deletes that room.
+  if (otherGone) await remove(ref(db, `rooms/${roomId}`));
+  // Presence too, so the opponent's screen shows them gone right away.
+  else await update(ref(db, `rooms/${roomId}`), { [`left/${seat}`]: true, [`presence/${seat}`]: false });
 }
