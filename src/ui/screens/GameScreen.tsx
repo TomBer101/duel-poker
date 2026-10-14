@@ -8,7 +8,7 @@ import { otherPlayer } from "../../engine/deck";
 import type { PlayerId } from "../../engine/types";
 import { findSeat, leaveRoom } from "../../net/room";
 import { subscribeToGameNumber } from "../../net/roomState";
-import { subscribeToPresence } from "../../net/sync";
+import { connect, disconnect, subscribeToPresence } from "../../net/sync";
 import { Board } from "../components/Board";
 import { Card } from "../components/Card";
 import { DisconnectOverlay } from "../components/DisconnectOverlay";
@@ -45,6 +45,11 @@ export function GameScreen() {
   const { roomId } = useParams();
   const { client, uid } = useFirebaseClient();
   const stored = roomId ? readStoredSeat(roomId) : null;
+  // Leaving a room closes the socket (frees a connection slot); a tab that
+  // comes back to /room/X must reopen it, or nothing below ever arrives.
+  useEffect(() => {
+    if (roomId) connect(client.db);
+  }, [roomId, client.db]);
   // Tagged with its room, like `seen` below. `you: null` = not seated here.
   const [found, setFound] = useState<{ roomId: string; you: PlayerId | null } | null>(null);
   useEffect(() => {
@@ -142,9 +147,12 @@ function GameScreenBody({ roomId, gameNumber = 1, you: seat = "p1" }: GameScreen
     state.phase === "reveal" ? state.revealIndex : state.phase === "result" ? 5 : 0;
 
   // Fire-and-forget: the db client outlives this screen, so the write lands
-  // while the router is already heading home.
+  // while the router is already heading home; then the socket closes.
   const leave = roomId
-    ? () => void leaveRoom(client.db, roomId, you).catch((err) => console.error("[GameScreen] leave failed", err))
+    ? () =>
+        void leaveRoom(client.db, roomId, you)
+          .catch((err) => console.error("[GameScreen] leave failed", err))
+          .finally(() => disconnect(client.db))
     : undefined;
 
   // Multiplayer only (solo has no protocol); replaces the board and every overlay.
