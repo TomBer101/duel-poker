@@ -11,16 +11,24 @@ vi.mock("../../app/firebaseContext", () => ({
 
 const createRoom = vi.fn<(...args: unknown[]) => unknown>();
 const joinRoom = vi.fn<(...args: unknown[]) => unknown>();
+const leaveRoom = vi.fn<(...args: unknown[]) => unknown>();
 vi.mock("../../net/room", () => ({
   createRoom: (...args: unknown[]) => createRoom(...args),
   joinRoom: (...args: unknown[]) => joinRoom(...args),
+  leaveRoom: (...args: unknown[]) => leaveRoom(...args),
 }));
 
 const setupPresence = vi.fn<(...args: unknown[]) => unknown>();
 const subscribeToPresence = vi.fn<(...args: unknown[]) => () => void>(() => () => {});
+const waitForConnection = vi.fn<(...args: unknown[]) => Promise<boolean>>(() => Promise.resolve(true));
+const disconnect = vi.fn();
 vi.mock("../../net/sync", () => ({
   setupPresence: (...args: unknown[]) => setupPresence(...args),
   subscribeToPresence: (...args: unknown[]) => subscribeToPresence(...args),
+  subscribeToConnection: () => () => {},
+  waitForConnection: (...args: unknown[]) => waitForConnection(...args),
+  connect: () => {},
+  disconnect: (...args: unknown[]) => disconnect(...args),
 }));
 
 describe("useLobby", () => {
@@ -62,6 +70,38 @@ describe("useLobby", () => {
 
     expect(result.current.error).toBe("incorrect password");
     expect(result.current.roomId).toBeNull();
+  });
+
+  test("no connection within the wait: tables-occupied error, and no writes", async () => {
+    createRoom.mockClear();
+    waitForConnection.mockResolvedValueOnce(false);
+    const { result } = renderHook(() => useLobby());
+
+    await act(async () => {
+      await result.current.create("Alice", "hunter2");
+    });
+
+    expect(createRoom).not.toHaveBeenCalled();
+    expect(result.current.error).toMatch(/All tables are occupied/);
+    expect(result.current.busy).toBe(false);
+    expect(result.current.roomId).toBeNull();
+  });
+
+  test("leaving the room closes the connection, even when the leave fails", async () => {
+    createRoom.mockResolvedValue("ABC123");
+    leaveRoom.mockRejectedValue(new Error("network"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { result } = renderHook(() => useLobby());
+    await act(async () => {
+      await result.current.create("Alice", "hunter2");
+    });
+
+    await act(async () => {
+      await result.current.leave();
+    });
+
+    expect(leaveRoom).toHaveBeenCalledWith(fakeDb, "ABC123", "p1");
+    expect(disconnect).toHaveBeenCalledWith(fakeDb);
   });
 
   test("opponentPresent reflects the other seat's presence once subscribed", async () => {

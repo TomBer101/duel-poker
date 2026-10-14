@@ -103,10 +103,15 @@ describe("applyHead — seq order", () => {
 });
 
 describe("applyHead — own-authored events (catch-up)", () => {
-  test("my END_TURN waits for my card, then applies unchanged", () => {
+  test("my END_TURN waits for my card, draws it itself (no click comes on catch-up), then applies unchanged", () => {
     const waiting = fakeCtx(before(10), "p1", "selector");
     expect(run(waiting, endTurn("p1", 0))).toHaveLength(1);
     expect(waiting.dispatch).not.toHaveBeenCalled();
+
+    const resolved = fakeCtx(before(10), "p1", "selector");
+    resolved.protocol.current = { ...resolved.protocol.current, positions: { 10: 0 }, cards: { 0: deck[10] } };
+    expect(run(resolved, endTurn("p1", 0))).toHaveLength(1);
+    expect(resolved.dispatch).toHaveBeenCalledWith({ type: "DRAW", by: "p1", card: deck[10] });
 
     const ready = fakeCtx(drawn(before(10)), "p1", "selector");
     expect(run(ready, endTurn("p1", 0))).toHaveLength(0);

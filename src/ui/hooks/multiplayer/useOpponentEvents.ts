@@ -7,6 +7,7 @@ import { DEAL_SLOTS, isFaceDownDraw, replaceDrawIndex, validReplaceHand } from "
 import { subscribeToEvents } from "../../../net/sync";
 import type { MultiplayerCtx } from "./context";
 import { commitOwnFaceDownCard } from "./myMoves";
+import { drawNext } from "./useTurnDraws";
 
 // Bound on waiting for MY OWN position reveal to land before falling back to
 // a literal card-less TIMEOUT_HIDDEN for my own hidden turn (see
@@ -170,8 +171,9 @@ function handleReplace(ctx: MultiplayerCtx, queue: Queue, event: ReplaceEvent): 
     return;
   }
   // The selector's REPLACE, or my own (catch-up): wait for the REPLACE_DRAW
-  // (my own secret one, as dealer, resolves from my deck), then apply.
-  if (state.pendingCard === null) return;
+  // (my own secret one, as dealer, resolves from my deck; mine is drawn here,
+  // no click will come for a move I already made), then apply.
+  if (state.pendingCard === null) return void drawNext(ctx);
   const drawIndex = state.drawCount - 1;
   if (drawIndex !== replaceDrawIndex(by)) {
     return reject(ctx, queue, `${who} REPLACE disagrees with local draw index (draw ${drawIndex})`);
@@ -216,6 +218,8 @@ function handleTimeout(
     // translation already used in handleEndTurn for an opponent's
     // face-down END_TURN -> PLACE_HIDDEN — and commit it exactly like
     // `placePending` would have, so the reveal-phase batch can still name and bind it.
+    // I may simply not have clicked the pile: draw the card if I know it.
+    if (state.pendingCard === null && drawNext(ctx)) return;
     if (state.pendingCard === null) {
       // My own position reveal hasn't landed yet either — an ordinary
       // async round trip, not tied to the 60s timeout window, so this is
@@ -335,8 +339,9 @@ function handleEndTurn(ctx: MultiplayerCtx, queue: Queue, event: EndTurnEvent): 
   if (state.phase !== "placing" || state.turn !== event.by) return;
   if (event.by === you) {
     // My own END_TURN found in the log (catch-up; live echoes are deduped by
-    // key): wait for my card to resolve, cross-check, apply unchanged.
-    if (state.pendingCard === null) return;
+    // key): draw my card once it resolves (no click will come for a move I
+    // already made), cross-check, apply unchanged.
+    if (state.pendingCard === null) return void drawNext(ctx);
     const drawIndex = state.drawCount - 1;
     const mismatch = endTurnMismatch(state, event, drawIndex);
     if (mismatch) return reject(ctx, queue, `own ${mismatch}`);

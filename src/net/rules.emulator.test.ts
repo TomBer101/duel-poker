@@ -412,7 +412,7 @@ const cases: Case[] = [
   // --- rematch reset (resetForRematch's multi-path update) ---
   { name: "reset: after both votes, the full reset succeeds", as: "bob", seed: (r) => { withGameState(r); bothVoted(r); }, write: rematchReset("p2"), allow: true },
   { name: "reset: still passes with scoredGame/score left over from the finished game", as: "bob", seed: (r) => { withGameState(r); bothVoted(r); r.score = { p1: 1 }; r.scoredGame = 1; }, write: rematchReset("p2"), allow: true },
-  { name: "reset: partial reset, deleting events alone", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: set("events", null), allow: false },
+  { name: "reset: partial reset, deleting events alone", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: set("seats/p1", null), allow: false },
   { name: "reset: partial reset, protocol alone", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: set("protocol", { dealer: "p2" }), allow: false },
   { name: "reset: partial reset, gameNumber alone", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: set("gameNumber", 2), allow: false },
   { name: "reset: partial reset, rematch votes alone", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: set("rematch", null), allow: false },
@@ -426,7 +426,7 @@ const cases: Case[] = [
   { name: "reset: a second reset once the votes are cleared", as: "alice", seed: (r) => { r.gameNumber = 2; r.protocol = { dealer: "p2" }; }, write: rematchReset("p1", { gameNumber: 3 }), allow: false },
   { name: "reset: before any vote", as: "alice", seed: withGameState, write: rematchReset("p2"), allow: false },
   { name: "reset: with only one vote", as: "alice", seed: (r) => { withGameState(r); r.rematch = { p1: true }; }, write: rematchReset("p2"), allow: false },
-  { name: "reset: deleting events before both votes", as: "alice", seed: withGameState, write: set("events", null), allow: false },
+  { name: "reset: deleting events before both votes", as: "alice", seed: withGameState, write: set("seats/p1", null), allow: false },
   { name: "reset: deleting protocol before both votes", as: "alice", seed: withGameState, write: set("protocol", { dealer: "p2" }), allow: false },
   { name: "reset: deleting rematch votes before both votes", as: "alice", seed: (r) => { r.rematch = { p1: true }; }, write: set("rematch", null), allow: false },
   { name: "reset: an unseated user cannot reset", as: "mallory", seed: (r) => { withGameState(r); bothVoted(r); }, write: rematchReset("p2"), allow: false },
@@ -438,18 +438,62 @@ const cases: Case[] = [
   { name: "reset: votes do not reopen write-once reveals", as: "alice", seed: (r) => { withGameState(r); bothVoted(r); }, write: set("protocol/reveals/r0", cardReveal("p1")), allow: false },
 ];
 
-describe("Phase 7 protocol rules", () => {
-  test.each(cases)("$name", async ({ as, seed, write, allow }) => {
-    const room = baseRoom();
-    seed?.(room);
-    await testEnv.withSecurityRulesDisabled(async (context) => {
-      await context.database().ref(at("")).set(room);
-    });
-    const db = as === null ? testEnv.unauthenticatedContext().database() : testEnv.authenticatedContext(UID[as]).database();
-    await (allow ? assertSucceeds(write(db)) : assertFails(write(db)));
+async function runCase({ as, seed, write, allow }: Case): Promise<void> {
+  const room = baseRoom();
+  seed?.(room);
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.database().ref(at("")).set(room);
   });
+  const db = as === null ? testEnv.unauthenticatedContext().database() : testEnv.authenticatedContext(UID[as]).database();
+  await (allow ? assertSucceeds(write(db)) : assertFails(write(db)));
+}
+
+describe("Phase 7 protocol rules", () => {
+  test.each(cases)("$name", runCase);
 
   // Known open items, scheduled separately (not asserted either way here).
   test.todo("meta/turn may only flip to the other seat (Task 16)");
   test.todo("TIMEOUT/TIMEOUT_HIDDEN denied before the turn deadline (Task 16)");
+});
+
+// ---------------------------------------------------------------------------
+// Phase 8 room cleanup: `left/<seat>` flags and whole-room delete, allowed
+// only once the other seat is gone (left, offline, or never filled).
+// ---------------------------------------------------------------------------
+
+const deleteRoom = (db: Db) => db.ref(at("")).remove();
+const p2Offline = (room: Room) => {
+  (room.presence as Record<string, boolean>).p2 = false;
+};
+const p2Left = (room: Room) => {
+  room.left = { p2: true };
+};
+const p1Left = (room: Room) => {
+  room.left = { p1: true };
+};
+const noP2 = (room: Room) => {
+  delete (room.seats as Record<string, unknown>).p2;
+  delete (room.presence as Record<string, unknown>).p2;
+};
+
+const cleanupCases: Case[] = [
+  { name: "left: a seated player marks themself left", as: "alice", write: set("left/p1", true), allow: true },
+  { name: "left: cannot mark the other seat left", as: "alice", write: set("left/p2", true), allow: false },
+  { name: "left: an unseated user cannot mark a seat left", as: "mallory", write: set("left/p1", true), allow: false },
+  { name: "left: only true is accepted", as: "alice", write: set("left/p1", "yes"), allow: false },
+  { name: "left: unknown keys are rejected", as: "alice", write: set("left/p3", true), allow: false },
+  { name: "delete: p1 deletes once p2 has left", as: "alice", seed: p2Left, write: deleteRoom, allow: true },
+  { name: "delete: p1 deletes once p2 is offline", as: "alice", seed: p2Offline, write: deleteRoom, allow: true },
+  { name: "delete: lone p1 deletes a room nobody joined", as: "alice", seed: noP2, write: deleteRoom, allow: true },
+  { name: "delete: p2 deletes once p1 has left", as: "bob", seed: p1Left, write: deleteRoom, allow: true },
+  { name: "delete: denied while the other player is still here", as: "alice", write: deleteRoom, allow: false },
+  { name: "delete: own left flag does not count as the other leaving", as: "alice", seed: p1Left, write: deleteRoom, allow: false },
+  { name: "delete: an unseated user cannot delete", as: "mallory", seed: p2Left, write: deleteRoom, allow: false },
+  { name: "delete: unauthenticated cannot delete", as: null, seed: p2Left, write: deleteRoom, allow: false },
+  { name: "delete: partial wipe is not a delete", as: "alice", seed: p2Left, write: set("seats/p1", null), allow: false },
+  { name: "delete: overwriting the room is not a delete", as: "alice", seed: p2Left, write: (db) => db.ref(at("")).set({ meta: { turn: "p1" } }), allow: false },
+];
+
+describe("Phase 8 room cleanup rules", () => {
+  test.each(cleanupCases)("$name", runCase);
 });
